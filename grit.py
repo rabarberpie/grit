@@ -7,9 +7,11 @@ import subprocess
 import threading
 import queue
 
-LOG_FILE_NAME = "_commands.log"
-ACTIVE_MANIFEST_FILE_NAME = "_active_manifest"  # .json is added automatically
 GRIT_DIRECTORY = ".grit"
+LOG_FILE_NAME = "_commands.log"
+ACTIVE_MANIFEST_FILE = "_active_manifest"   # .json is added automatically
+ACTIVE_CONFIG_FILE = "_config"   # Contains the current active config (file path to config file except .json)
+DEFAULT_CONFIG_FILE = "config"   # .json is added automatically
 # Command queue extra size in addition to the number of parallel jobs. This is used to make sure the
 # queue is always full (in practise).
 COMMAND_QUEUE_EXTRA_SIZE = 2
@@ -233,8 +235,7 @@ class Manifest(object):
                                           object_hook=json_manifest_object_hook)
             except json.JSONDecodeError as err:
                 raise JSONDecodeError(str(err) + " in file " + file_path)
-
-        # Manifest files are relative to the config file directory.
+        # Store manifest directory for later usage.
         self.dir_path = os.path.dirname(file_path)
 
     def save(self, file_path: str):
@@ -509,6 +510,10 @@ class Manifest(object):
             # Run the commands directly.
             for command in job:
                 command.execute()
+                if command.result_code != 0:
+                    # If an error occurred, no point to continue within the job (next commands likely depend on
+                    # previous ones).
+                    break
             self.handle_job_result(job)
 
     def handle_job_result(self, job):
@@ -557,11 +562,15 @@ class Manifest(object):
         for repo in self.get_target_repos():
             job = []
             # Determine the local path first, since it is needed for additional commands in the git.
-            directory = repo.get_optional_setting("directory")   # Can only be in repo.
+            directory = repo.get_optional_setting("directory")   # Can only be in repo, not in any profile.
             if directory is not None:
                 local_path = directory
             else:
-                local_path = repo.get_repo()
+                local_path = repo.get_repo().split("/")[-1]   # Only last part of repo will be used by git!
+            if os.path.exists(local_path):
+                # Local repo already exist, skip this one silently. For instance, if you re-clone, avoid
+                # lots of errors for all existing repos.
+                continue
             cd_cmd_line = "cd " + local_path + " && "
             # First, clone the repository.
             cmd_line = "git clone"   # Add --progress to include progress info in the log file (note: one line each!)
@@ -605,7 +614,7 @@ class Manifest(object):
         print("-" * 80)
         print("- " + command.client_data)   # Contains repo name
         if self.args.verbose > 0:
-            print("- Executed: " + command.command_line)
+            print("- Command: " + command.command_line)
         print("-" * 80)
         if command.result_output is not None:
             print(command.result_output, end="")    # NL already included in result output.
@@ -620,9 +629,9 @@ class Manifest(object):
             directory = repo.get_optional_setting("directory")   # Can only be in repo.
             if directory is not None:
                 local_path = directory
-                client_data = repo.get_repo()
+                client_data = directory
                 if directory != repo.get_repo():
-                    client_data += " in directory " + directory
+                    client_data += " (remote: " + repo.get_repo() + ")"
             else:
                 local_path = repo.get_repo()
                 client_data = repo.get_repo()
@@ -658,20 +667,57 @@ class Config(object):
 
     def __init__(self):
         self.config = None
-        self.dir_path = None
+        self.config_path = None    # Relative GRIT_DIRECTORY and without ".json".
         self.active_manifest = None
 
-    def load(self, file_path: str):
-        """ Loads a config file. """
+    def load(self, config_path: str):
+        """ Load a new config file. The config_path argument is the path within GRIT_DIRECTORY, except
+        that the .json file extension is to be omitted.
+        """
+        self.config_path = config_path
+        path_parts = (config_path + ".json").split("/")
+        file_path = os.path.join(GRIT_DIRECTORY, *path_parts)
         with open(file_path, "r") as file_stream:
             try:
                 self.config = json.load(file_stream,
                                         object_hook=json_config_object_hook)
             except json.JSONDecodeError as err:
                 raise JSONDecodeError(str(err) + " in file " + file_path)
+        # # Save a small file containing the config file used.
+        # with open(os.path.join(GRIT_DIRECTORY, ACTIVE_CONFIG_FILE), "w") as file_stream:
+        #     file_stream.write(config)
 
-        # Manifest files are relative to the config file directory.
-        self.dir_path = os.path.dirname(file_path)
+    def fetch_additional(self):
+        """ Fetch any additional manifests. """
+        for fetch_manifest in self.get_fetch_manifests():
+            if fetch_manifest.get_mandatory_setting("method") == "git":
+                directory = fetch_manifest.get_optional_setting("directory")   # Optional.
+                repo = fetch_manifest.get_mandatory_setting("repository")
+                if directory is not None:
+                    local_path = directory
+                else:
+                    local_path = repo.split("/")[-1]  # Only last part of repo name will be used by git!
+                if os.path.exists(local_path):
+                    # Local repo already exist, skip this one silently. For instance, if you update a config file,
+                    # only new ones should be cloned.
+                    continue
+                cmd_line = "cd " + GRIT_DIRECTORY + " && git clone"
+                branch = fetch_manifest.get_optional_setting("branch")   # Optional.
+                if branch is not None:
+                    cmd_line += " --branch " + branch
+                cmd_line += " " + fetch_manifest.get_mandatory_setting("remote-url") + "/" + repo + ".git"
+                if directory is not None:
+                    cmd_line += " " + directory
+                command = CommandExecutor.Command(cmd_line, "Fetching additional manifest and config file(s) from "
+                                                  + repo + "...")
+                command.execute()
+            else:
+                raise ValueError("Method " + fetch_manifest["method"] + " is not supported.")
+
+    def update(self):
+        """ Update all manifest gits. """
+        # TODO: fetch and rebase for branches, but skip for tags/commits, and re-download for ftp/http URLs.
+        pass
 
     def get_manifest_layers(self):
         """ Returns a list of all manifest layers. """
@@ -687,7 +733,18 @@ class Config(object):
         self.active_manifest = None
         for manifest_path in self.get_manifest_layers():
             manifest = Manifest()
-            manifest.load(os.path.join(self.dir_path, manifest_path + ".json"))
+            # The manifest path is always using "/", regardless of underlying OS.
+            # Therefore, first split it into parts and re-join with proper file separator.
+            path_parts = (manifest_path + ".json").split("/")
+            if manifest_path.startswith("/"):
+                # Path is from root of GRIT_DIRECTORY.
+                file_path = os.path.join(GRIT_DIRECTORY, *path_parts)
+            else:
+                # Relative path.
+                config_dir_parts = self.config_path.split("/")[:-1]  # Skip last part, which is the config file itself.
+                path_parts = (manifest_path + ".json").split("/")
+                file_path = os.path.join(GRIT_DIRECTORY, *config_dir_parts, *path_parts)
+            manifest.load(file_path)
             if self.active_manifest is None:
                 self.active_manifest = manifest
             else:
@@ -706,7 +763,7 @@ class Config(object):
 
     def save_active_manifest(self):
         """ Save the final manifest to the file system. """
-        self.active_manifest.save(os.path.join(self.dir_path, ACTIVE_MANIFEST_FILE_NAME + ".json"))
+        self.active_manifest.save(os.path.join(GRIT_DIRECTORY, ACTIVE_MANIFEST_FILE + ".json"))
 
     def load_active_manifest(self):
         """ Load the final manifest from the file system. """
@@ -724,16 +781,52 @@ class Config(object):
                     break
         if found_dir:
             self.active_manifest = Manifest()
-            self.active_manifest.load(os.path.join(path, GRIT_DIRECTORY, ACTIVE_MANIFEST_FILE_NAME + ".json"))
+            self.active_manifest.load(os.path.join(path, GRIT_DIRECTORY, ACTIVE_MANIFEST_FILE + ".json"))
             return self.active_manifest
         else:
             raise RuntimeError("Cannot find the " + GRIT_DIRECTORY + " directory!")
+
+    def do_init(self, args):
+        init_parser = argparse.ArgumentParser()
+        init_parser.add_argument("manifest_url", nargs="?", action="store", default=None)
+        init_parser.add_argument("--branch", "-b", action="store", dest="branch", default=None)
+        init_parser.add_argument("--directory", "-d", action="store", dest="directory", default=None)
+        init_parser.add_argument("--config", "-c", action="store", dest="config", default=None)
+        init_parser.add_argument("--update", "-u", action="store_true", dest="update", default=None)
+        init_args = init_parser.parse_args(args.args)   # Parse args after init.
+        if init_args.update:
+            # Update all manifest gits first.
+            print("Updating all manifest and config file(s)...")
+            self.update()
+        # Fetch initial/additional manifest and config file(s), if specified.
+        if init_args.manifest_url is not None:
+            if not os.path.exists(GRIT_DIRECTORY):
+                # Create grit directory if it doesn't exist (=first time).
+                cmd_line = "mkdir " + GRIT_DIRECTORY
+                command = CommandExecutor.Command(cmd_line)
+                command.execute()
+            cmd_line = "cd " + GRIT_DIRECTORY + " && git clone"
+            if init_args.branch is not None:
+                cmd_line += " --branch " + init_args.branch
+            cmd_line += " " + init_args.manifest_url   # Remote URL and repository (including .git).
+            if init_args.directory is not None:
+                cmd_line += " " + init_args.directory
+            command = CommandExecutor.Command(cmd_line, "Fetching specified manifest and config file(s)...")
+            command.execute()
+        # Load and activate a config if specified.
+        if init_args.config is not None:
+            print("Loading " + init_args.config + ".")
+            self.load(init_args.config)
+            self.fetch_additional()
+            self.make_active_manifest()
+            self.save_active_manifest()
+            print("Generated active manifest.")
 
 
 if __name__ == "__main__":
     # Generic git commands are those that are executed as in for each target repo. Any command args are
     # transparently added to the git command.
-    generic_git_commands = ["remote", "rebase", "fetch", "pull", "push", "merge", "branch", "status"]
+    generic_git_commands = ["remote", "rebase", "fetch", "pull", "push", "merge", "branch", "status", "stash", "tag"]
     parser = argparse.ArgumentParser(prog="grit",
                                      description="grit is a tool to manage many git repositories effeciently in a project.")
     parser.add_argument("--version", action="version", version="%(prog)s 1.0")
@@ -744,28 +837,16 @@ if __name__ == "__main__":
     parser.add_argument("--groups", "-g", action="store", dest="groups", default="all",
                         help="a repository must belong to at least one of the listed groups.\n"
                         "Multiple groups must be comma separated with no space between.")
-    parser.add_argument("command", help="command to perform: init, clone, fetch, rebase, pull, upload")
+    parser.add_argument("command", help="command to perform: init, clone, fetch, rebase, pull, push, merge, branch, status")
     parser.add_argument("args", help="arguments to the command (depends on command)", nargs=argparse.REMAINDER)
     args = parser.parse_args()
-    if args.command == "init":
-        print("Initializing...", end="")
+    if args.command == "init":   # init must be called from the project root directory (=parent of GRIT_DIRECTORY).
         config = Config()
-        config.load(args.args[0])
-        config.make_active_manifest()
-        config.save_active_manifest()
-        print(args)
-        print("done.")
-    elif args.command == "load":
-        config = Config()
-        config.load_active_manifest()
+        config.do_init(args)
     elif args.command == "clone":
         config = Config()
         manifest = config.load_active_manifest()
         manifest.do_clone(args)
-    # elif args.command == "status":
-    #     config = Config()
-    #     manifest = config.load_active_manifest()
-    #     manifest.do_status(args)
     elif args.command in generic_git_commands:
         config = Config()
         manifest = config.load_active_manifest()

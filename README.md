@@ -19,10 +19,9 @@ Thus, the priority order of any setting is:
 2. The referenced profile setting (or default)
 3. The global profile setting.
 
-
 # Configuration
-A specific configuration consists of layering one or many manifests on top of each other, where upper manifests override settings from lower manifests.
-Optionally, as a first step, it can retrieve additional manifest files from other locations (e.g. using git clone, ftp, etc.)
+A specific configuration consists of layering one or many manifests on top of each other, where upper manifests override settings from lower manifests. The resulting manifest is stored as an "active manifest". Most gitre commands are performed against this manifest.
+Optionally, as a first step, it can retrieve additional manifest files from other locations (e.g. using git clone, ftp, etc.).
 
-# Data Extention
-It is possible to add arbritarily json key/values as long as they start with "x-". gitre will ignore all these keys. This can be used to store additional meta-data about the repositories, such as code license information, which is parsed by other tools.
+# Data Extension
+It is possible to add arbritarily json key/values as long as they start with "x-". grit will ignore all these keys. This can be used to store additional meta-data about the repositories, such as code license information, which is parsed by other tools.
