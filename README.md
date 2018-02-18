@@ -25,3 +25,45 @@ Optionally, as a first step, it can retrieve additional manifest files from othe
 
 # Data Extension
 It is possible to add arbritarily json key/values as long as they start with "x-". grit will ignore all these keys. This can be used to store additional meta-data about the repositories, such as code license information, which is parsed by other tools.
+
+# Generic commands
+Generic commands are git commands that are transparently executed on all target repositories. For each repository, the result is printed as returned by git, prefixed with header lines that shows which repository the result is related to.
+Essentially, grit here acts like an iterator of multiple repositories, executing the same git command.
+
+Syntax:
+grit <grit-options> <git-command> <git-command-parameters>
+
+grit-options are:
+ -g<groups>      comma-separated list of group (optional)
+ -j<n>           n is the number of parallel jobs being executed (default: 1)
+ --verbose, -v   add some more verbose printing (to grit; not to the git command!)
+
+git-command is one of:
+remote, rebase, fetch, pull, push, merge, branch, status, stash, tag
+
+git-command-parameters are passed transparently to the specied git command.
+
+Examples:
+grit status
+- Execute "git status" on all respositories in the active manifest.
+grit -j4 -gg1,g2 status -s
+- Execute "git status -s" on all respositories belonging to either group "g1" or "g2". Perform this operation using 4 parallel processes.
+
+# Clone command
+Cloning repositories in the active manifest is not a generic command, but have grit-specific logic. This is required since each repository has its own individual settings, as specified by the active manifest.
+
+Syntax:
+grit <grit-options> clone
+
+grit-options are:
+ -g<groups>      comma-separated list of group (optional)
+ -j<n>           n is the number of parallel jobs being executed (default: 1)
+ --verbose, -v   add some more verbose printing
+
+
+Examples:
+grit clone
+- Clone all repositories in the active manifest.
+grit -j4 -gg1,g2 clone
+- Clone all respositories belonging to either group "g1" or "g2". Perform this operation using 4 parallel processes.
+
