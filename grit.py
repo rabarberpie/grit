@@ -11,7 +11,6 @@ GRIT_DIRECTORY = ".grit"
 LOG_FILE_NAME = "_commands.log"
 ACTIVE_MANIFEST_FILE = "_active_manifest"   # .json is added automatically
 ACTIVE_CONFIG_FILE = "_config"   # Contains the current active config (file path to config file except .json)
-DEFAULT_CONFIG_FILE = "config"   # .json is added automatically
 # Command queue extra size in addition to the number of parallel jobs. This is used to make sure the
 # queue is always full (in practise).
 COMMAND_QUEUE_EXTRA_SIZE = 2
@@ -89,7 +88,7 @@ class Settings(object):
 
 class Profile(Settings):
     """ Stores all settings related to a profile. """
-    valid_keys = ["remote-name", "remote-url", "remote-push-url",
+    valid_keys = ["inherit", "remote-name", "remote-url", "remote-push-url",
                   "branch", "remote-branch", "single-branch"]
 
     def __init__(self, profile_name: str):
@@ -254,12 +253,6 @@ class Manifest(object):
                 profile = self.get_profile(default_profile)
             except ValueError:
                 raise ValueError("The default profile " + default_profile + " is not defined!")
-        global_profile = self.manifest.get("global-profile", None)
-        if global_profile is not None:
-            try:
-                profile = self.get_profile(global_profile)
-            except ValueError:
-                raise ValueError("The global profile " + global_profile + " is not defined!")
 
     def validate_repos(self):
         """ Do some sanity checking of the repos. The final checking is done when performing an operation. """
@@ -289,17 +282,6 @@ class Manifest(object):
         """
         for profile in self.get_profiles():
             if profile.get_profile_name() == self.manifest.get("default-profile", None):
-                return profile
-        else:
-            return None
-
-    def get_global_profile(self):
-        """ Get the global profile, if defined. If not, None is returned.
-        The global profile contain shared settings among all profiles. That is,
-        if a setting is not found in a profile, the global profile is consulted.
-        """
-        for profile in self.get_profiles():
-            if profile.get_profile_name() == self.manifest.get("global-profile", None):
                 return profile
         else:
             return None
@@ -384,7 +366,7 @@ class Manifest(object):
 
     def get_optional_setting(self, repo, key: str, default=None):
         """ Get an optional setting value based on priority order for a specific repo.
-        The search order is: 1. repo, 2. referenced profile, 3. global profile.
+        The search order is: 1. repo, 2. referenced profile, 3. parent profile, 4. grandparent profile etc.
         If a setting is not found, the default value is returned.
         """
         # Repo settings have highest priority.
@@ -394,17 +376,22 @@ class Manifest(object):
             profile = self.get_profile(repo.get_optional_setting("use-profile"))
             value = profile.get_optional_setting(key)
             if value is None:
-                # Last, check global profile - if defined.
-                profile = self.get_global_profile()
-                if profile is not None:
-                    value = profile.get_optional_setting(key, default)
+                # Check parent profile settings (and then grandparent etc.)
+                profile_name = profile.get_optional_setting("inherit")
+                while profile_name is not None:
+                    profile = self.get_profile(profile_name)
+                    value = profile.get_optional_setting(key)
+                    if value is not None:
+                        break
+                    else:
+                        profile_name = profile.get_optional_setting("inherit")
                 else:
                     value = default
         return value
 
     def get_mandatory_setting(self, repo, key: str):
         """ Get a mandatory setting value based on priority order for a specific repo.
-        The search order is: 1. repo, 2. referenced profile, 3. global profile.
+        The search order is: 1. repo, 2. referenced profile, 3. parent profile, 4. grandparent profile etc.
         If a setting is not found, the KeyError exception is raised.
         """
         value = self.get_optional_setting(repo, key)
@@ -420,13 +407,10 @@ class Manifest(object):
             self.remove_profile(profile_name)
         for repo_name in overlay_manifest.get_remove_repos():
             self.remove_repo(repo_name)
-        # Next, overlay default and global profile names.
+        # Next, overlay default profile name.
         if "default-profile" in overlay_manifest.manifest:
             default_profile_name = overlay_manifest.manifest["default-profile"]
             self.manifest["default-profile"] = default_profile_name
-        if "global-profile" in overlay_manifest.manifest:
-            global_profile_name = overlay_manifest.manifest["global-profile"]
-            self.manifest["global-profile"] = global_profile_name
         # Next, overlay the profiles.
         for profile in overlay_manifest.get_profiles():
             profile_name = profile.get_profile_name()
@@ -633,8 +617,10 @@ class Manifest(object):
                 if directory != repo.get_repo():
                     client_data += " (remote: " + repo.get_repo() + ")"
             else:
-                local_path = repo.get_repo()
-                client_data = repo.get_repo()
+                local_path = repo.get_repo().split("/")[-1]   # Only last part of repo will be used by git!
+                client_data = local_path
+                if local_path != repo.get_repo():
+                    client_data += " (remote: " + repo.get_repo() + ")"
             cd_cmd_line = "cd " + local_path + " && "
             # Rebase the repository.
             cmd_line = cd_cmd_line + "git " + args.command
@@ -697,7 +683,8 @@ class Config(object):
                     local_path = directory
                 else:
                     local_path = repo.split("/")[-1]  # Only last part of repo name will be used by git!
-                if os.path.exists(local_path):
+                dir_path = os.path.join(GRIT_DIRECTORY, local_path)
+                if os.path.exists(dir_path):
                     # Local repo already exist, skip this one silently. For instance, if you update a config file,
                     # only new ones should be cloned.
                     continue
@@ -725,7 +712,7 @@ class Config(object):
 
     def get_fetch_manifests(self):
         """ Returns a list of all fetch manifests instructions. """
-        return self.config["fetch-manifests"]
+        return self.config.get("fetch-manifests", [])   # Default to empty list.
 
     def make_active_manifest(self):
         """ Overlays the specified manifests. """
