@@ -21,7 +21,7 @@ Thus, the priority order of any setting is:
 
 # Configuration
 A specific configuration consists of layering one or many manifests on top of each other, where upper manifests override settings from lower manifests. The resulting manifest is stored as an "active manifest". Most grit commands are performed against this manifest.
-Optionally, it can also refer to other locations where additional manifest files should be fetch (as a first step, before the configuration is initialized).
+Optionally, it can also refer to other locations where additional manifest files should be fetched (as a first step, before the configuration is initialized).
 
 Layering of manifests can be useful in different use-cases:
 * A base platform is developed by one team. This team maintains a manifest that includes all repositories of the base platform. Another team needs to customize the base platform for a specific customer. This includes adding new repositories and branching off some repositories (which needs to be customized). By placing all these manifest changes in its own customer manifest and overlaying it ontop of the base platform manifest, the second team doesn't need to branch off the base platform manifest. They can even place the customer manifest in its own git and by using the "fetch manifest" mechanism in the configuration file, fetch the base platform manifest automatically when the customer configuration file is initialized.`
@@ -39,21 +39,27 @@ grit <grit-options> <git-command> <git-command-parameters>
 ```
 
 grit-options are:
-* `-g<groups>`      comma-separated list of groups (optional)
-* `-j<n>`           n is the number of parallel jobs being executed (default: 1)
-* `--verbose, -v`   add some more verbose printing (to grit; not to the git command!)
+
+| Option | Description |
+| --- | --- |
+| `-g<groups>` | Comma-separated list of groups (optional) |
+| `-j<n>` | Perform the command using n parallel processes (default: 1) |
+| `--verbose, -v` | Add some more verbose printing (to grit; not to the git command!) |
 
 git-command is one of:
 `remote, rebase, fetch, pull, push, merge, branch, status, stash, tag`
 
-git-command-parameters are passed transparently to the specied git command.
+git-command-parameters are passed transparently to the specified git command.
 
 Examples:
-* `grit status`  Execute "git status" on all respositories in the active manifest.
-* `grit -j4 -gg1,g2 status -s`  Execute `git status -s` on all respositories belonging to either group `g1` or `g2`. Perform this operation using 4 parallel processes.
+
+| Command | Description |
+| --- | --- |
+| `grit status` | Execute `git status` on all respositories in the active manifest. |
+| `grit -j4 -gg1,g2 status -s` | Execute `git status -s` on all respositories belonging to either group `g1` or `g2`. Perform this operation using 4 parallel processes. |
 
 # Clone command
-Cloning repositories in the active manifest is not a generic command, but have grit-specific logic. This is required since each repository has its own individual settings, as specified by the active manifest.
+Cloning repositories in the active manifest is not a generic command, but have grit specific logic. This is required since each repository has its own individual settings, as specified by the active manifest.
 
 Syntax:
 ```
@@ -61,11 +67,16 @@ grit <grit-options> clone
 ```
 
 grit-options are:
-* `-g<groups>`      comma-separated list of group (optional)
-* `-j<n>`           n is the number of parallel jobs being executed (default: 1)
-* `--verbose, -v`   add some more verbose printing
 
+| Option | Description |
+| --- | --- |
+| `-g<groups>` | Comma-separated list of groups (optional) |
+| `-j<n>` | Perform the command using n parallel processes (default: 1) |
+| `--verbose, -v` | Add some more verbose printing (to grit; not to the git command!) |
 
 Examples:
-* `grit clone`  Clone all repositories in the active manifest.
-* `grit -j4 -gg1,g2 clone`  Clone all respositories belonging to either group "g1" or "g2". Perform this operation using 4 parallel processes.
+
+| Command | Description |
+| --- | --- |
+| `grit clone` | Clone all repositories in the active manifest.	|
+| `grit -j4 -gg1,g2 clone` | Clone all respositories belonging to either group `g1` or `g2`. Perform this operation using 4 parallel processes. |
