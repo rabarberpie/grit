@@ -541,6 +541,12 @@ class Manifest(object):
 
     def do_clone(self, args):
         """ Performs git clone on all repos. """
+        clone_parser = argparse.ArgumentParser()
+        clone_parser.add_argument("--reference", action="store", dest="reference", default=None)
+        clone_parser.add_argument("--dissociate", action="store_true", dest="dissociate")
+        clone_parser.add_argument("--bare", action="store_true", dest="bare")
+        clone_parser.add_argument("--mirror", action="store_true", dest="mirror")
+        clone_args = clone_parser.parse_args(args.args)   # Parse args after init.
         self.set_args(args)
         self.prepare_for_commands()
         for repo in self.get_target_repos():
@@ -559,7 +565,8 @@ class Manifest(object):
             # First, clone the repository.
             cmd_line = "git clone"   # Add --progress to include progress info in the log file (note: one line each!)
             remote_name = self.get_optional_setting(repo, "remote-name", "origin")
-            if remote_name != "origin":
+            if remote_name != "origin" and not clone_args.bare and not clone_args.mirror:
+                # bare/mirror and origin are incompatible.
                 cmd_line += " --origin " + remote_name
             remote_branch = self.get_optional_setting(repo, "remote-branch")
             if remote_branch is None:
@@ -569,26 +576,37 @@ class Manifest(object):
             single_branch = self.get_optional_setting(repo, "single-branch")
             if single_branch == "yes":
                 cmd_line += " --single-branch"
+            if clone_args.reference is not None:
+                # The reference argument must refer to the root of the other project.
+                # TODO: Later git versions support --reference-if-able. This is better, if available.
+                cmd_line += " --reference " + os.path.join(clone_args.reference, local_path)
+            if clone_args.dissociate:
+                cmd_line += " --dissociate"
+            if clone_args.bare:
+                cmd_line += " --bare"
+            if clone_args.mirror:
+                cmd_line += " --mirror"
             cmd_line += " " + self.get_mandatory_setting(repo, "remote-url") + "/" + repo.get_repo() + ".git"
             if directory is not None:
                 cmd_line += " " + directory
             job.append(CommandExecutor.Command(cmd_line,
                                                "Started to clone " + repo.get_repo(),
                                                "Completed " + repo.get_repo()))
-            # Next, configure the git, if needed.
-            remote_push_url = self.get_optional_setting(repo, "remote-push-url")
-            if remote_push_url is not None:
-                # Add a different push URL.
-                cmd_line = cd_cmd_line + "git remote set-url --add --push " + remote_name\
-                           + " " + remote_push_url + "/" + repo.get_repo() + ".git"
-                job.append(CommandExecutor.Command(cmd_line))
-                # Finally, checkout the branch, if needed.
-            if remote_branch is not None:
-                # Must use capital -B to force create the branch; needed for example for master,
-                # which is already created by clone above.
-                cmd_line = cd_cmd_line + "git checkout -B " + self.get_mandatory_setting(repo, "branch")\
-                           + " " + remote_name + "/" + remote_branch
-                job.append(CommandExecutor.Command(cmd_line))
+            if not clone_args.bare and not clone_args.mirror:
+                # Next, configure the git, if needed.
+                remote_push_url = self.get_optional_setting(repo, "remote-push-url")
+                if remote_push_url is not None:
+                    # Add a different push URL.
+                    cmd_line = cd_cmd_line + "git remote set-url --add --push " + remote_name\
+                               + " " + remote_push_url + "/" + repo.get_repo() + ".git"
+                    job.append(CommandExecutor.Command(cmd_line))
+                    # Finally, checkout the branch, if needed.
+                if remote_branch is not None:
+                    # Must use capital -B to force create the branch; needed for example for master,
+                    # which is already created by clone above.
+                    cmd_line = cd_cmd_line + "git checkout -B " + self.get_mandatory_setting(repo, "branch")\
+                               + " " + remote_name + "/" + remote_branch
+                    job.append(CommandExecutor.Command(cmd_line))
             self.queue_job(job)
         # All commands queued up. Gather all remaining results and then cleanup and exit.
         self.cleanup_after_commands()

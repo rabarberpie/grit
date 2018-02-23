@@ -42,8 +42,8 @@ grit-options are:
 
 | Option | Description |
 | --- | --- |
-| `-g<groups>` | Comma-separated list of groups (optional) |
-| `-j<n>` | Perform the command using n parallel processes (default: 1) |
+| `-g <groups>` | Comma-separated list of groups (optional) |
+| `-j <n>` | Perform the command using n parallel processes (default: 1) |
 | `--verbose, -v` | Add some more verbose printing (to grit; not to the git command!) |
 
 git-command is one of:
@@ -56,27 +56,36 @@ Examples:
 | Command | Description |
 | --- | --- |
 | `grit status` | Execute `git status` on all respositories in the active manifest. |
-| `grit -j4 -gg1,g2 status -s` | Execute `git status -s` on all respositories belonging to either group `g1` or `g2`. Perform this operation using 4 parallel processes. |
+| `grit -j4 -g g1,g2 status -s` | Execute `git status -s` on all respositories belonging to either group `g1` or `g2`. Perform this operation using 4 parallel processes. |
 
 # Clone command
 Cloning repositories in the active manifest is not a generic command, but have grit specific logic. This is required since each repository has its own individual settings, as specified by the active manifest.
 
 Syntax:
 ```
-grit <grit-options> clone
+grit <grit-options> clone <clone-options>
 ```
 
 grit-options are:
 
 | Option | Description |
 | --- | --- |
-| `-g<groups>` | Comma-separated list of groups (optional) |
-| `-j<n>` | Perform the command using n parallel processes (default: 1) |
+| `-g <groups>` | Comma-separated list of groups (optional) |
+| `-j <n>` | Perform the command using n parallel processes (default: 1) |
 | `--verbose, -v` | Add some more verbose printing (to grit; not to the git command!) |
+
+clone-options are:
+
+| Option | Description |
+| --- | --- |
+| `--mirror` | Clone with `--mirror` (see git documentation for more details) |
+| `--bare` | Clone with `--bare` (see git documentation for more details) |
+| `--reference <other_project_root>` | Clone with `--reference` to the same repository in another project (see git documentation for more details) |
+| `--dissociate` | Clone with `--dissociate` (see git documentation for more details) |
 
 Examples:
 
 | Command | Description |
 | --- | --- |
 | `grit clone` | Clone all repositories in the active manifest.	|
-| `grit -j4 -gg1,g2 clone` | Clone all respositories belonging to either group `g1` or `g2`. Perform this operation using 4 parallel processes. |
+| `grit -j4 -g g1,g2 clone` | Clone all respositories belonging to either group `g1` or `g2`. Perform this operation using 4 parallel processes. |
