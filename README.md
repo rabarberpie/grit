@@ -6,6 +6,16 @@ It is designed with below principles:
 * Layered settings, making it easy to override a specific setting by overlaying.
 * Use JSON as format for settings files, for easy parsing, as well as easy manual editing.
 
+# Installation
+Copy grit.py to ~/bin and make it executable:
+
+```
+git clone https://github.com/rabarberpie/grit.git
+mkdir ~/bin
+cp grit/grit.py ~/bin
+chmod +x grit/grit.py
+```
+
 # Manifests
 Manifest files are the core settings files and have below sections:
 * Repositories: Contain the list of repositories that are included by the manifest. Optionally, may also include parameters/options which override the profile settings (see below).
@@ -16,7 +26,7 @@ A profile can inherit settings from another profile, to even further encapsulate
 Thus, the priority order of any setting is:
 1. The repository setting
 2. The referenced profile setting (or default)
-3. The parent profile (if any).
+3. The parent profile to above (if any).
 4. The grandparent profile (if any) etc. etc.
 
 # Configuration
@@ -24,7 +34,9 @@ A specific configuration consists of layering one or many manifests on top of ea
 Optionally, it can also refer to other locations where additional manifest files should be fetched (as a first step, before the configuration is initialized).
 
 Layering of manifests can be useful in different use-cases:
-* A base platform is developed by one team. This team maintains a manifest that includes all repositories of the base platform. Another team needs to customize the base platform for a specific customer. This includes adding new repositories and branching off some repositories (which needs to be customized). By placing all these manifest changes in its own customer manifest and overlaying it ontop of the base platform manifest, the second team doesn't need to branch off the base platform manifest. They can even place the customer manifest in its own git and by using the "fetch manifest" mechanism in the configuration file, fetch the base platform manifest automatically when the customer configuration file is initialized.`
+* After cloning a project with many respositories, a developer wants to add a new repository or perhaps change branch on some existing repositories. These changes (only the differences) can be made in a "local manifest" which is then overlaid ontop of the project manifest. To simplify, the project master config file can include `local_manifest` as last manifest layer and then also include an empty `local_manifest.json` file. Everything is then setup for the developer to add the differences in this file.
+* A base platform is developed by one team. This team maintains a manifest that includes all repositories of the base platform. Another team needs to customize the base platform for a specific customer. This includes adding new repositories and branching off some repositories (which needs to be customized). By placing all these manifest changes in its own customer manifest and overlaying it ontop of the base platform manifest, the second team doesn't need to branch off the base platform manifest. They can even place the customer manifest in its own git and by using the "fetch manifest" mechanism in the configuration file, fetch the base platform manifest automatically when the customer configuration file is initialized.
+* A product consists of a common base platform with a framework layer ontop. This framework comes in two variants: one basic and one with extensions. These two variants are maintained on different branches, "basic_master" and "extended_master".
 
 # Data Extension
 It is possible to add arbritarily json key/values as long as they start with "x-". grit will ignore all these keys. This can be used to store additional meta-data about the repositories, such as code license information, which is parsed by other tools.
@@ -46,8 +58,7 @@ grit-options are:
 | `-j <n>` | Perform the command using n parallel processes (default: 1) |
 | `--verbose, -v` | Add some more verbose printing (to grit; not to the git command!) |
 
-git-command is one of:
-`remote, rebase, fetch, pull, push, merge, branch, status, stash, tag`
+git-command is any valid git command. Even locally defined git alias are possible. Essentially, all non-special grit commands are treated as generic commands.
 
 git-command-parameters are passed transparently to the specified git command.
 
@@ -89,3 +100,29 @@ Examples:
 | --- | --- |
 | `grit clone` | Clone all repositories in the active manifest.	|
 | `grit -j4 -g g1,g2 clone` | Clone all respositories belonging to either group `g1` or `g2`. Perform this operation using 4 parallel processes. |
+
+# For-each command
+The for-each command executes a specified bash command on each target repository.
+
+Syntax:
+```
+grit <grit-options> foreach <bash-command-line>
+```
+
+bash-command-line should be a single quoted argument. If not quoted, all arguments will be passed on, but below special environment variables are not available.
+
+Below environment variables are available to the bash command:
+
+| Variable | Description |
+| --- | --- |
+| `LOCAL_PATH` | The local directory path where the repository is stored. |
+| `REMOTE_REPO` | The remote repository path. |
+| `REMOTE_NAME` | The remote name. |
+| `REMOTE_URL` | The remote URL. |
+
+Examples:
+
+| Command | Description |
+| --- | --- |
+| `grit foreach pwd` | Print the current working directory. |
+| `grit foreach 'echo $LOCAL_PATH; echo $REMOTE_REPO` | Print the local path and remote repository path. |
