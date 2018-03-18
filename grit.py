@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import os
 import sys
+import time
 import json
 import argparse
 import subprocess
@@ -52,8 +53,12 @@ class Settings(object):
         self.valid_keys = valid_keys
         self.settings = {}
 
+    def get_settings(self):
+        """ Get all settings, as a dict. NOTE: Do not modify returned dict! """
+        return self.settings   # Just a reference is returned.
+
     def set_settings(self, settings: dict):
-        """ Extracts settings from a dict. Raises ValueError if invalid setting is present.
+        """ Extracts/updates settings from a dict. Raises ValueError if invalid setting is present.
         NOTE: To remove a setting, set its value to null (in JSON file). This is mapped to None in Python.
         """
         # First, check if valid keys.
@@ -77,9 +82,12 @@ class Settings(object):
         except KeyError:
             raise KeyError("Settings key " + key + " is expected, but missing!")
 
-    def get_settings(self):
-        """ Get all settings, as a dict. NOTE: Do not modify returned dict! """
-        return self.settings   # Just a reference is returned.
+    def set_setting(self, key: str, value):
+        self.settings[key] = value
+
+    def remove_setting(self, key):
+        if key in self.settings:
+            del self.settings[key]
 
     def overlay(self, overlay_settings):
         """ Overlays the provided Settings object on top of existing one.
@@ -127,6 +135,14 @@ class Repository(Settings):
 
     def get_repo(self):
         return self.repo
+
+    def get_local_path(self):
+        """ Returns the local path (relative to project root directory). """
+        # Note that "directory" can only be in repo, not in any profile. Default to repo name.
+        directory = self.get_optional_setting("directory", self.get_repo())
+        # Convert logical path (always with "/") to OS specific path.
+        directory_parts = directory.split("/")
+        return os.path.join(*directory_parts)
 
     def overlay(self, overlay_repo):
         """ Overlays the provided repository on top of existing one.
@@ -226,7 +242,7 @@ class Manifest(object):
 
     def __init__(self):
         self.manifest = None
-        self.dir_path = None
+        self.manifest_path = None
         self.request_queue = None
         self.result_queue = None
         self.pending_jobs = 0
@@ -234,8 +250,14 @@ class Manifest(object):
         self.log_file_stream = None
         self.args = None
 
-    def load(self, file_path: str):
-        """ Load a manifest file (JSON format). """
+    def load(self, manifest_path: str):
+        """ Load a new manifest file (JSON format). The manifest_path argument is the path within GRIT_DIRECTORY,
+        except that the .json file extension is to be omitted.
+        Note that manifest_path must use "/" as directory separator, regardless of native OS separator.
+        """
+        self.manifest_path = manifest_path
+        path_parts = (manifest_path + ".json").split("/")
+        file_path = os.path.join(self.get_root_path(), GRIT_DIRECTORY, *path_parts)
         logger.debug("Loading manifest file " + file_path)
         with open(file_path, "r") as file_stream:
             try:
@@ -243,16 +265,51 @@ class Manifest(object):
                                           object_hook=json_manifest_object_hook)
             except json.JSONDecodeError as err:
                 raise JSONDecodeError(str(err) + " in file " + file_path)
-        # Store manifest directory for later usage.
-        self.dir_path = os.path.dirname(file_path)
 
-    def save(self, file_path: str):
-        """ Save to a manifest file (JSON format). """
+    def save(self, manifest_path: str):
+        """ Save to a manifest file (JSON format). The manifest_path argument is the path within GRIT_DIRECTORY,
+        except that the .json file extension is to be omitted.
+        Note that manifest_path must use "/" as directory separator, regardless of native OS separator.
+        """
+        path_parts = (manifest_path + ".json").split("/")
+        file_path = os.path.join(self.get_root_path(), GRIT_DIRECTORY, *path_parts)
         logger.debug("Saving manifest file " + file_path)
         with open(file_path, "w") as file_stream:
             json.dump(self.manifest, file_stream, indent=4, sort_keys=True, default=json_manifest_encoder)
             # Add a new line for a pretty ending.
             file_stream.write("\n")
+
+    @staticmethod
+    def get_root_path():
+        """ Get the full path to the project root directory.
+        Assumes that the current working directory is at, or below, project root.
+        """
+        found_dir = False
+        path = os.getcwd()
+        while not found_dir:
+            if os.path.exists(GRIT_DIRECTORY):
+                found_dir = True
+            else:
+                # Go up one step
+                parent_path = os.path.dirname(path)
+                if parent_path != path:
+                    path = parent_path
+                else:
+                    break
+        if found_dir:
+            logger.debug("Project root path is " + path)
+            return path
+        else:
+            raise RuntimeError("Cannot find the " + GRIT_DIRECTORY + " directory!")
+
+    def load_active_manifest(self):
+        """ Load the active manifest from the file system. Automatically finds the active
+        manifest file, even if current working directory is below project root. """
+        self.load(ACTIVE_MANIFEST_FILE)
+
+    def save_active_manifest(self):
+        """ Save the manifest as new active manifest to the file system. """
+        self.save(ACTIVE_MANIFEST_FILE)
 
     def validate_profiles(self):
         """ Do some sanity checking of the profiles. The final checking is done when performing an operation. """
@@ -457,7 +514,7 @@ class Manifest(object):
         """ Prepare for executing commands. """
         # Open log file.
         if not self.args.no_log:
-            self.log_file_stream = open(os.path.join(self.dir_path, LOG_FILE_NAME), "a+t")
+            self.log_file_stream = open(os.path.join(self.get_root_path(), GRIT_DIRECTORY, LOG_FILE_NAME), "a+t")
         if self.args.parallel_jobs > 1:
             # Setup all command executors. Each item in request and result queue is a list of Command instances.
             self.request_queue = queue.Queue(args.parallel_jobs + COMMAND_QUEUE_EXTRA_SIZE)
@@ -474,23 +531,25 @@ class Manifest(object):
             logger.debug("No parallel jobs; will run all jobs in same process.")
             pass
 
-    def cleanup_after_commands(self):
-        # First, flush out remaining completed jobs.
-        logger.debug("Cleaning up after commands.")
+    def finish_commands(self):
+        # First, finish remaining completed jobs. Will block until everything is done or error occurs.
+        logger.debug("Finishing command execution.")
         if self.args.parallel_jobs > 1:
             while self.pending_jobs > 0:
                 job = self.result_queue.get(block=True)   # We can block now.
                 self.pending_jobs -= 1
-                self.handle_job_result(job)
+                self.handle_job_result(job)   # If error, exit is called (unless force mode).
             if self.log_file_stream is not None:
+                logger.debug("Closing log file.")
                 self.log_file_stream.close()
-        self.exit_commands(0)
+        # Last, exit command execution.
+        self.exit_commands()
 
-    def exit_commands(self, result_code):
+    def exit_commands(self):
         """ Exit from executing commands. Ongoing commands will be completed, but no new ones
         will be started.
         """
-        logger.debug("Existing commands.")
+        logger.debug("Exiting command execution.")
         if self.args.parallel_jobs > 1:
             # First, signal stop to all command executors (threads).
             for command_executor in self.command_executors:
@@ -498,9 +557,6 @@ class Manifest(object):
             # Next, join them all.
             for command_executor in self.command_executors:
                 command_executor.join()
-        # Last, exit.
-        logger.debug("Exist with code: " + str(result_code))
-        exit(result_code)
 
     def queue_job(self, job):
         """ Queue up a new job and process any completed jobs. If request queue is full, this method
@@ -543,16 +599,18 @@ class Manifest(object):
                 # NOTE: There might be other successfully completed commands (or entire jobs) which are
                 # still in the result queue and consequently will not be logged.
                 # However, each error when running any command is always printed (by the command executor).
-                self.exit_commands(command.result_code)
+                self.exit_commands()
+                exit(command.result_code)
 
-    def get_target_repos(self):
-        """ Get all repos in a list, which is the target of the command. Each item is in instance of Repository.
-        The target repos are controlled by the --group option. """
-        if self.args.groups == "all":
+    def get_target_repos(self, groups=None):
+        """ Get all repos in a list, which is the target of the command. Each item is an instance of Repository.
+        groups is a string of comma-separated list of groups (as specified by the --group option.)
+        """
+        if groups is None:
             target_repos = self.get_repos()
         else:
             target_repos = []
-            args_groups = self.args.groups.split(",")
+            args_groups = groups.split(",")
             for repo in self.get_repos():
                 repo_groups = repo.get_optional_setting("groups")  # This is a list of strings.
                 if repo_groups is not None:
@@ -574,14 +632,10 @@ class Manifest(object):
         clone_args = clone_parser.parse_args(args.args)   # Parse args after init.
         self.set_args(args)
         self.prepare_for_commands()
-        for repo in self.get_target_repos():
+        for repo in self.get_target_repos(args.groups):
             job = []
             # Determine the local path first, since it is needed for additional commands in the git.
-            directory = repo.get_optional_setting("directory")   # Can only be in repo, not in any profile.
-            if directory is not None:
-                local_path = directory
-            else:
-                local_path = repo.get_repo().split("/")[-1]   # Only last part of repo will be used by git!
+            local_path = repo.get_local_path()
             if os.path.exists(local_path):
                 # Local repo already exist, skip this one silently. For instance, if you re-clone, avoid
                 # lots of errors for all existing repos.
@@ -615,8 +669,7 @@ class Manifest(object):
             if clone_args.mirror:
                 cmd_line += " --mirror"
             cmd_line += " " + self.get_mandatory_setting(repo, "remote-url") + "/" + repo.get_repo() + ".git"
-            if directory is not None:
-                cmd_line += " " + directory
+            cmd_line += " " + local_path
             job.append(CommandExecutor.Command(cmd_line,
                                                "Started to clone " + repo.get_repo(),
                                                "Completed " + repo.get_repo()))
@@ -641,7 +694,7 @@ class Manifest(object):
                     job.append(CommandExecutor.Command(cmd_line))
             self.queue_job(job)
         # All commands queued up. Gather all remaining results and then cleanup and exit.
-        self.cleanup_after_commands()
+        self.finish_commands()
 
     def handler_generic_command_result(self, command):
         """ Handler for generic command results. """
@@ -657,17 +710,13 @@ class Manifest(object):
         """ Performs a generic git command. Prints the output as is for each target repository. """
         self.set_args(args)
         self.prepare_for_commands()
-        for repo in self.get_target_repos():
+        for repo in self.get_target_repos(args.groups):
             job = []
             # Determine the local path first, since it is needed for additional commands in the git.
-            directory = repo.get_optional_setting("directory")   # Can only be in repo.
-            if directory is not None:
-                local_path = directory
-            else:
-                local_path = repo.get_repo().split("/")[-1]   # Only last part of repo will be used by git!
+            local_path = repo.get_local_path()
             client_data = local_path
-            if local_path != repo.get_repo():
-                client_data += " (remote: " + repo.get_repo() + ")"
+            if args.verbose > 0:
+                client_data += " (remote repo: " + repo.get_repo() + ")"
             cd_cmd_line = "cd " + local_path + " && "
             # Execute the git command with the specified arguments.
             cmd_line = cd_cmd_line + "git " + args.command
@@ -676,29 +725,25 @@ class Manifest(object):
                                                self.handler_generic_command_result, client_data))
             self.queue_job(job)
         # All commands queued up. Gather all remaining results and then cleanup and exit.
-        self.cleanup_after_commands()
+        self.finish_commands()
 
     def do_foreach(self, args):
         """ Performs a generic shell command for each target repository.
         Below environment variables are available to the shell/bash command:
-        LOCAL_PATH: The local directory path where the repository is stored.
+        LOCAL_PATH: The local directory path where the repository is stored (OS specific path).
         REMOTE_REPO: The remote repository path.
         REMOTE_NAME: The remote name.
         REMOTE_URL: The remote URL.
         """
         self.set_args(args)
         self.prepare_for_commands()
-        for repo in self.get_target_repos():
+        for repo in self.get_target_repos(args.groups):
             job = []
             # Determine the local path first, since it is needed for additional commands in the git.
-            directory = repo.get_optional_setting("directory")   # Can only be in repo.
-            if directory is not None:
-                local_path = directory
-            else:
-                local_path = repo.get_repo().split("/")[-1]   # Only last part of repo will be used by git!
+            local_path = repo.get_local_path()
             client_data = local_path
-            if local_path != repo.get_repo():
-                client_data += " (remote: " + repo.get_repo() + ")"
+            if args.verbose > 0:
+                client_data += " (remote repo: " + repo.get_repo() + ")"
             cd_cmd_line = "cd " + local_path + " && "
             # Execute the bash command with the specified arguments.
             # NOTE: The argument(s) much be quoted, otherwise environment variable expansion
@@ -706,12 +751,57 @@ class Manifest(object):
             cmd_line = cd_cmd_line + "LOCAL_PATH=" + local_path + " REMOTE_REPO=" + repo.get_repo()
             cmd_line += " REMOTE_NAME=" + self.get_optional_setting(repo, "remote-name", "origin")
             cmd_line += " REMOTE_URL=" + self.get_mandatory_setting(repo, "remote-url")
+            # By using bash -c, the environment variables are valid even if ;, |, && etc. are used.
             cmd_line += " bash -c '" + " ".join(args.args) + "'"
             job.append(CommandExecutor.Command(cmd_line, None, None, args.verbose,
                                                self.handler_generic_command_result, client_data))
             self.queue_job(job)
         # All commands queued up. Gather all remaining results and then cleanup and exit.
-        self.cleanup_after_commands()
+        self.finish_commands()
+
+    def handler_snapshot_command_result(self, command):
+        """ Handler for snapshot command results. """
+        repo = command.client_data
+        if command.result_output is not None:
+            head_ref = command.result_output[:-1]   # Remove trailing newline character.
+            logger.debug("Snapshot for " + repo.get_repo() + ": " + head_ref)
+            # Set the HEAD ref as tag in the repo.
+            repo.set_setting("tag", head_ref)
+            repo.remove_setting("branch")
+        # If result_output is None due to error, the error is handled by handle_job_result,
+        # so no action here.
+
+    def do_snapshot(self, args):
+        """ Creates a new snapshot manifest.
+        The snapshot manifest is a copy of the current active manifest expect that for each
+        target repo, the current HEAD reference (SHA-1) is inserted as "tag" in the manifest.
+        Since tag overrides any branch definition in profiles, the snapshot manifest can be used
+        to store the current state. However, keep in mind that if git performs a cleanup,
+        the specified HEAD reference may no longer be available. A safer way to make a snapshot is
+        to make a tag on each repo instead ("grit tag <tag_name>")
+        """
+        if len(args.args) == 0:
+            # If no specified snapshot file name, create one based on date and time.
+            snapshot_file = "snapshot_" + time.strftime("%Y%m%d_%H%M%S")
+        else:
+            snapshot_file = args.args[0]
+        # Base the snapshot manifest on the active manifest.
+        snapshot_manifest = Manifest()
+        snapshot_manifest.load_active_manifest()
+        # Next, fill in the exact ref/commit for each repo.
+        self.set_args(args)
+        self.prepare_for_commands()
+        for repo in snapshot_manifest.get_target_repos(groups=None):
+            job = []
+            # Determine the local path first, since it is needed for additional commands in the git.
+            cd_cmd_line = "cd " + repo.get_local_path() + " && "
+            cmd_line = cd_cmd_line + "git rev-parse HEAD"
+            job.append(CommandExecutor.Command(cmd_line, None, None, args.verbose,
+                                               self.handler_snapshot_command_result, repo))   # repo as client data.
+            self.queue_job(job)
+        # All commands queued up. Gather all remaining results and then cleanup and exit.
+        self.finish_commands()
+        snapshot_manifest.save(snapshot_file)
 
 
 def json_config_object_hook(dct):
@@ -735,12 +825,13 @@ class Config(object):
 
     def __init__(self):
         self.config = None
-        self.config_path = None    # Relative GRIT_DIRECTORY and without ".json".
+        self.config_path = None    # Relative GRIT_DIRECTORY and without ".json". Always using "/" as separator.
         self.active_manifest = None
 
     def load(self, config_path: str):
         """ Load a new config file. The config_path argument is the path within GRIT_DIRECTORY, except
         that the .json file extension is to be omitted.
+        Assumes that current working directory is the project root path.
         """
         self.config_path = config_path
         path_parts = (config_path + ".json").split("/")
@@ -759,24 +850,21 @@ class Config(object):
         """ Fetch any additional manifests. """
         for fetch_manifest in self.get_fetch_manifests():
             if fetch_manifest.get_mandatory_setting("method") == "git":
-                directory = fetch_manifest.get_optional_setting("directory")   # Optional.
                 repo = fetch_manifest.get_mandatory_setting("repository")
-                if directory is not None:
-                    local_path = directory
-                else:
-                    local_path = repo.split("/")[-1]  # Only last part of repo name will be used by git!
-                dir_path = os.path.join(GRIT_DIRECTORY, local_path)
-                if os.path.exists(dir_path):
+                directory = fetch_manifest.get_optional_setting("directory", repo)   # Default to repo name.
+                directory_parts = directory.split("/")
+                local_path = os.path.join(*directory_parts)   # Convert to OS specific path.
+                if os.path.exists(os.path.join(GRIT_DIRECTORY, local_path)):
                     # Local repo already exist, skip this one silently. For instance, if you update a config file,
                     # only new ones should be cloned.
+                    logger.debug("Fetching additional manifests; ignoring " + local_path)
                     continue
                 cmd_line = "cd " + GRIT_DIRECTORY + " && git clone"
                 branch = fetch_manifest.get_optional_setting("branch")   # Optional.
                 if branch is not None:
                     cmd_line += " --branch " + branch
                 cmd_line += " " + fetch_manifest.get_mandatory_setting("remote-url") + "/" + repo + ".git"
-                if directory is not None:
-                    cmd_line += " " + directory
+                cmd_line += " " + local_path
                 command = CommandExecutor.Command(cmd_line, "Fetching additional manifest and config file(s) from "
                                                   + repo + "...")
                 command.execute()
@@ -803,17 +891,16 @@ class Config(object):
         for manifest_path in self.get_manifest_layers():
             manifest = Manifest()
             # The manifest path is always using "/", regardless of underlying OS.
-            # Therefore, first split it into parts and re-join with proper file separator.
-            path_parts = (manifest_path + ".json").split("/")
             if manifest_path.startswith("/"):
                 # Path is from root of GRIT_DIRECTORY.
-                file_path = os.path.join(GRIT_DIRECTORY, *path_parts)
+                manifest.load(manifest_path[1:])   # Skip initial "/" since load assumes root of GRIT_DIRECTORY.
             else:
-                # Relative path.
-                config_dir_parts = self.config_path.split("/")[:-1]  # Skip last part, which is the config file itself.
-                path_parts = (manifest_path + ".json").split("/")
-                file_path = os.path.join(GRIT_DIRECTORY, *config_dir_parts, *path_parts)
-            manifest.load(file_path)
+                # Manifest path is relative from directory of config path.
+                last_separator_pos = self.config_path.rfind("/")
+                if last_separator_pos > 0:
+                    manifest.load(self.config_path[:last_separator_pos] + "/" + manifest_path)
+                else:
+                    manifest.load(manifest_path)
             if self.active_manifest is None:
                 self.active_manifest = manifest
             else:
@@ -826,34 +913,9 @@ class Config(object):
             self.active_manifest.validate_repos()
             pass
 
-    def get_active_manifest(self):
-        """ Get the final manifest as determined by a previous call to make_active_manifest. """
-        return self.active_manifest
-
     def save_active_manifest(self):
         """ Save the final manifest to the file system. """
-        self.active_manifest.save(os.path.join(GRIT_DIRECTORY, ACTIVE_MANIFEST_FILE + ".json"))
-
-    def load_active_manifest(self):
-        """ Load the final manifest from the file system. """
-        found_dir = False
-        path = os.getcwd()
-        while not found_dir:
-            if os.path.exists(GRIT_DIRECTORY):
-                found_dir = True
-            else:
-                # Go up one step
-                parent_path = os.path.dirname(path)
-                if parent_path != path:
-                    path = parent_path
-                else:
-                    break
-        if found_dir:
-            self.active_manifest = Manifest()
-            self.active_manifest.load(os.path.join(path, GRIT_DIRECTORY, ACTIVE_MANIFEST_FILE + ".json"))
-            return self.active_manifest
-        else:
-            raise RuntimeError("Cannot find the " + GRIT_DIRECTORY + " directory!")
+        self.active_manifest.save(ACTIVE_MANIFEST_FILE)
 
     def do_init(self, args):
         init_parser = argparse.ArgumentParser()
@@ -861,6 +923,7 @@ class Config(object):
         init_parser.add_argument("--branch", "-b", action="store", dest="branch", default=None)
         init_parser.add_argument("--directory", "-d", action="store", dest="directory", default=None)
         init_parser.add_argument("--config", "-c", action="store", dest="config", default=None)
+        init_parser.add_argument("--manifest", "-m", action="store", dest="manifest", default=None)
         init_parser.add_argument("--update", "-u", action="store_true", dest="update", default=None)
         init_args = init_parser.parse_args(args.args)   # Parse args after init.
         if init_args.update:
@@ -879,17 +942,23 @@ class Config(object):
                 cmd_line += " --branch " + init_args.branch
             cmd_line += " " + init_args.manifest_url   # Remote URL and repository (including .git).
             if init_args.directory is not None:
-                cmd_line += " " + init_args.directory
+                cmd_line += " " + init_args.directory   # TODO: Convert to OS specific path?
             command = CommandExecutor.Command(cmd_line, "Fetching specified manifest and config file(s)...")
             command.execute()
         # Load and activate a config if specified.
         if init_args.config is not None:
-            print("Loading " + init_args.config + ".")
+            print("Loading config " + init_args.config + ".")
             self.load(init_args.config)
             self.fetch_additional()
             self.make_active_manifest()
             self.save_active_manifest()
             print("Generated active manifest.")
+        elif init_args.manifest is not None:
+            print("Loading manifest " + init_args.manifest + ".")
+            manifest = Manifest()
+            manifest.load(init_args.manifest)
+            manifest.save_active_manifest()
+            print("Saved as active manifest.")
 
 
 if __name__ == "__main__":
@@ -901,10 +970,10 @@ if __name__ == "__main__":
     parser.add_argument("--force", "-f", action="store_true", dest="force_mode", help="continue even if an error occurred.")
     parser.add_argument("--jobs", "-j", type=int, default=1, dest="parallel_jobs", help="number of parallel jobs to perform. Default is 1.")
     parser.add_argument("--no-log", action="store_true", dest="no_log", help="do not add command details to log file.")
-    parser.add_argument("--groups", "-g", action="store", dest="groups", default="all",
+    parser.add_argument("--groups", "-g", action="store", dest="groups", default=None,
                         help="a repository must belong to at least one of the listed groups.\n"
                         "Multiple groups must be comma separated with no space between.")
-    parser.add_argument("command", help="command to perform: init, clone, fetch, rebase, pull, push, merge, branch, status")
+    parser.add_argument("command", help="command to perform: init, clone, foreach, or any git command.")
     parser.add_argument("args", help="arguments to the command (depends on command)", nargs=argparse.REMAINDER)
     args = parser.parse_args()
     if args.debug_mode:
@@ -916,15 +985,19 @@ if __name__ == "__main__":
         config = Config()
         config.do_init(args)
     elif args.command == "clone":
-        config = Config()
-        manifest = config.load_active_manifest()
+        manifest = Manifest()
+        manifest.load_active_manifest()
         manifest.do_clone(args)
     elif args.command == "foreach":
-        config = Config()
-        manifest = config.load_active_manifest()
+        manifest = Manifest()
+        manifest.load_active_manifest()
         manifest.do_foreach(args)
+    elif args.command == "snapshot":
+        manifest = Manifest()
+        manifest.load_active_manifest()
+        manifest.do_snapshot(args)
     else:
-        # Assume a git command. Note that also local git aliases will work.
-        config = Config()
-        manifest = config.load_active_manifest()
+        # Assume a git command. Note that local git aliases also will work.
+        manifest = Manifest()
+        manifest.load_active_manifest()
         manifest.do_generic(args)

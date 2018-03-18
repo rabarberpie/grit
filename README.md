@@ -41,22 +41,31 @@ Layering of manifests can be useful in different use-cases:
 # Data Extension
 It is possible to add arbritarily json key/values as long as they start with "x-". grit will ignore all these keys. This can be used to store additional meta-data about the repositories, such as code license information, which is parsed by other tools.
 
-# Generic commands
-Generic commands are git commands that are transparently executed on all target repositories. For each repository, the result is printed as returned by git, prefixed with header lines that shows which repository the result is related to.
-Essentially, grit here acts like an iterator of multiple repositories, executing the same git command.
+# Grit Options
+There is a set of options to grit that are common to all commands. These always follow immediately after the grit command.
 
 Syntax:
 ```
-grit <grit-options> <git-command> <git-command-parameters>
+grit <grit-options> <command> <command-parameters/options>
 ```
 
 grit-options are:
 
 | Option | Description |
 | --- | --- |
-| `-g <groups>` | Comma-separated list of groups (optional) |
-| `-j <n>` | Perform the command using n parallel processes (default: 1) |
-| `--verbose, -v` | Add some more verbose printing (to grit; not to the git command!) |
+| `--groups, -g <groups>` | Comma-separated list of groups (optional) |
+| `--jobs, -j <n>` | Perform the command using n parallel processes (default: 1) |
+| `--force, -f` | Continue even if an error occurred |
+| `--verbose, -v` | Add some more verbose printing |
+
+# Generic Commands
+Generic commands are git commands that are transparently executed on all target repositories. For each repository, the result is printed as returned by git, prefixed with header lines that shows which repository the result is related to.
+Essentially, grit here acts like an iterator over multiple repositories, executing the same git command.
+
+Syntax:
+```
+grit <grit-options> <git-command> <git-command-parameters>
+```
 
 git-command is any valid git command. Even locally defined git alias are possible. Essentially, all non-special grit commands are treated as generic commands.
 
@@ -69,21 +78,13 @@ Examples:
 | `grit status` | Execute `git status` on all respositories in the active manifest. |
 | `grit -j4 -g g1,g2 status -s` | Execute `git status -s` on all respositories belonging to either group `g1` or `g2`. Perform this operation using 4 parallel processes. |
 
-# Clone command
+# Clone Command
 Cloning repositories in the active manifest is not a generic command, but have grit specific logic. This is required since each repository has its own individual settings, as specified by the active manifest.
 
 Syntax:
 ```
 grit <grit-options> clone <clone-options>
 ```
-
-grit-options are:
-
-| Option | Description |
-| --- | --- |
-| `-g <groups>` | Comma-separated list of groups (optional) |
-| `-j <n>` | Perform the command using n parallel processes (default: 1) |
-| `--verbose, -v` | Add some more verbose printing (to grit; not to the git command!) |
 
 clone-options are:
 
@@ -109,7 +110,7 @@ Syntax:
 grit <grit-options> foreach <bash-command-line>
 ```
 
-bash-command-line should be a single quoted argument. If not quoted, all arguments will be passed on, but below special environment variables are not available.
+bash-command-line should be a single quoted argument. If not quoted, all arguments will be passed on, but environment variables may be not available as expected.
 
 Below environment variables are available to the bash command:
 
@@ -125,4 +126,16 @@ Examples:
 | Command | Description |
 | --- | --- |
 | `grit foreach pwd` | Print the current working directory. |
-| `grit foreach 'echo $LOCAL_PATH; echo $REMOTE_REPO` | Print the local path and remote repository path. |
+| `grit foreach 'echo $LOCAL_PATH; echo $REMOTE_REPO'` | Print the local path and remote repository path. |
+
+# Snapshot Command
+The shapshot command creates a new snapshot manifest, which is a copy of the current active manifest, expect that for each target repo, the current HEAD reference (SHA-1) is inserted as "tag" in the manifest. Since "tag" overrides any branch definition in profiles, the snapshot manifest can be used to store the current state. However, keep in mind that if git performs a cleanup, the specified HEAD reference may no longer be available.
+A safer way to make a snapshot is to make a tag on each repo instead (`grit tag <tag_name>`).
+
+Syntax:
+```
+grit <grit-options> snapshot <snapshot-manifest-name>
+```
+
+The snapshot-manifest-name (without .json) is optional. If not specified, a unique name is created based on date and time: "snapshot_YYYYMMDD_HHMMSS".
+The snapshot manifest file is stored in the GRIT_DIRECTORY and can be used in `grit init -m <snapshot-manifest-name>` to restore the snapshot state.
