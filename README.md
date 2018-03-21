@@ -6,21 +6,83 @@ It is designed with below principles:
 * Layered settings, making it easy to override a specific setting by overlaying.
 * Use JSON as format for settings files, for easy parsing, as well as easy manual editing.
 
+# Quick Overview
+A simple manifest, consisting of 3 different repositories, all located on github:
+```
+{
+    "profiles": [
+	{
+	    "profile": "github",
+	    "remote-name": "github",
+	    "remote-url": "https://github.com"
+	}
+    ],
+
+    "repositories": [
+	{
+	    "repository": "rabarberpie/grit",
+	    "directory": "mylocal/grit",
+	    "groups": ["g1"],
+	    "use-profile": "github"
+	},
+	{
+	    "repository": "rabarberpie/grit_test",
+	    "groups": ["g1", "g2"],
+	    "use-profile": "github"
+	},
+	{
+	    "repository": "rabarberpie/grit_test2",
+	    "groups": ["g3"],
+	    "use-profile": "github"
+	}
+    ]
+}
+```
+A profile describes the common settings/data needed to interact with the remote repository. The actual repositories and where to store them locally are listed separately.
+
+Once the manifest has been initialized, the repositories are cloned via:
+```
+grit clone
+```
+
+After that, you can use the normal git commands, but performed on all repositories (or limited to the ones belonging to certain groups).
+For example,
+```
+grit checkout -b mybranch
+```
+results in:
+```
+--------------------------------------------------------------------------------
+- mylocal/grit
+--------------------------------------------------------------------------------
+Switched to a new branch 'mybranch'
+--------------------------------------------------------------------------------
+- rabarberpie/grit_test
+--------------------------------------------------------------------------------
+Switched to a new branch 'mybranch'
+--------------------------------------------------------------------------------
+- rabarberpie/grit_test2
+--------------------------------------------------------------------------------
+Switched to a new branch 'mybranch'
+```
+
+One of the key strengths of grit is the ability to overlay manifest files, which is very handy in large systems. Read on to find out more...
+
 # Installation
 Copy grit.py to ~/bin and make it executable:
 
 ```
 git clone https://github.com/rabarberpie/grit.git
 mkdir ~/bin
-cp grit/grit.py ~/bin
-chmod +x grit/grit.py
+cp grit/grit.py ~/bin/grit
+chmod +x ~/bin/grit
 ```
 
 # Manifests
 Manifest files are the core settings files and have below sections:
 * Repositories: Contain the list of repositories that are included by the manifest. Optionally, may also include parameters/options which override the profile settings (see below).
 
-* Profiles: A profile contains all required settings/parameters/options to interact with the remote repository (using git). Typically, many repositories share the same settings; by placing these in a shared profile, duplication is avoided. Optionally, one profile can be marked as "default", which will then be used for all repositories which doesn't explicitely reference a specific profile.
+* Profiles: A profile contains all required settings/parameters/options to interact with the remote repository (using git). Typically, many repositories share the same settings; by placing these in a shared profile, duplication is avoided. Optionally, one profile can be marked as "default", which will be used for all repositories which don't explicitely reference a specific profile.
 A profile can inherit settings from another profile, to even further encapsulate shared settings in a parent profile. This can for example be used to place global settings in a parent profile, such as clone depth and/or branch name, and remote specific settings in child profiles.
 
 Thus, the priority order of any setting is:
@@ -53,8 +115,8 @@ grit-options are:
 
 | Option | Description |
 | --- | --- |
-| `--groups, -g <groups>` | Comma-separated list of groups (optional) |
-| `--jobs, -j <n>` | Perform the command using n parallel processes (default: 1) |
+| `--groups, -g <groups>` | Comma-separated list of groups (optional). The command is only performed for repositories belonging to at least one of listed groups. |
+| `--jobs, -j <n>` | Perform the command using n parallel processes (default: 1). Particularly useful to speed up clone operations. |
 | `--force, -f` | Continue even if an error occurred |
 | `--verbose, -v` | Add some more verbose printing |
 
@@ -76,7 +138,7 @@ Examples:
 | Command | Description |
 | --- | --- |
 | `grit status` | Execute `git status` on all respositories in the active manifest. |
-| `grit -j4 -g g1,g2 status -s` | Execute `git status -s` on all respositories belonging to either group `g1` or `g2`. Perform this operation using 4 parallel processes. |
+| `grit -j4 -g g1,g2 status -s` | Execute `git status -s` on all respositories belonging to either group `g1` or `g2` (or both). Perform this operation using 4 parallel processes. |
 
 # Clone Command
 Cloning repositories in the active manifest is not a generic command, but have grit specific logic. This is required since each repository has its own individual settings, as specified by the active manifest.
