@@ -173,11 +173,12 @@ class CommandExecutor(threading.Thread):
         No getters/setters or properties, fields are accessed directly.
         """
 
-        def __init__(self, command_line: str, init_display_line: str=None, done_display_line: str=None, verbose=0,
-                     result_handler=None, client_data=None):
+        def __init__(self, command_line: str, init_display_line: str=None, done_display_line: str=None,
+                     print_errors=True, verbose=0, result_handler=None, client_data=None):
             self.init_display_line = init_display_line  # Display line before starting command.
             self.done_display_line = done_display_line  # Display line after command completed.
             self.command_line = command_line   # The shell command line to execute.
+            self.print_errors = print_errors   # Print output if command exited with error.
             self.verbose = verbose   # The verbose level.
             self.result_code = -1    # The status code returned by the command. -1 means command not executed.
             self.result_output = None   # The combined output of stdout and stderr by the command (in string)
@@ -200,10 +201,11 @@ class CommandExecutor(threading.Thread):
             else:
                 # If an error occurred, always print the details.
                 logger.debug("Failed to execute " + self.command_line)
-                output = "-" * 80 + "\n" + self.command_line + "\n"
-                if result.stdout is not None:
-                    output += result.stdout
-                print(output, end="")    # Since multiple threads are printing, print all in single call.
+                if self.print_errors:
+                    output = "-" * 80 + "\n" + self.command_line + "\n"
+                    if result.stdout is not None:
+                        output += result.stdout
+                    print(output, end="")    # Since multiple threads are printing, print all in single call.
             self.result_code = result.returncode
             self.result_output = result.stdout
 
@@ -721,7 +723,7 @@ class Manifest(object):
             # Execute the git command with the specified arguments.
             cmd_line = cd_cmd_line + "git " + args.command
             cmd_line += " " + " ".join(args.args)
-            job.append(CommandExecutor.Command(cmd_line, None, None, args.verbose,
+            job.append(CommandExecutor.Command(cmd_line, None, None, False, args.verbose,
                                                self.handler_generic_command_result, client_data))
             self.queue_job(job)
         # All commands queued up. Gather all remaining results and then cleanup and exit.
