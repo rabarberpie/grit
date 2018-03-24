@@ -18,9 +18,9 @@ The profiles section of the manifest file may contain below settings:
 
 | Setting | Description |
 | --- | --- |
-| `inherit` | Specifies the name of parent profile (optional). |
+| `inherit` | Specifies the name of the parent profile (optional). |
 | `remote-name` | The name of the remote server. If not specified, the git default value is used (`origin`). |
-| `remote-url` | The URL of the remote server. The full URL to a repository is constructed via `remote-url/repository`. |
+| `remote-url` | The URL of the remote server. The full URL to a repository is constructed via `<remote-url>/<repository>.git`. |
 | `remote-push-url` | Only to be used if git pushes are to be made to a different URL than `remote-url`. |
 | `branch` | The branch to create and checkout after a repository is cloned. The local branch is setup to track the remote branch. |
 | `remote-branch` | Only to be used if the remote branch name is different from the local branch branch. |

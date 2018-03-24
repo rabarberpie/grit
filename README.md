@@ -120,28 +120,36 @@ grit-options are:
 | `--force, -f` | Continue even if an error occurred |
 | `--verbose, -v` | Add some more verbose printing |
 
-# Generic Commands
-Generic commands are git commands that are transparently executed on all target repositories. For each repository, the result is printed as returned by git, prefixed with header lines that shows which repository the result is related to.
-Essentially, grit here acts like an iterator over multiple repositories, executing the same git command.
+# Init Command
+The init command is used to initialize the active manifest, which is the basis for all other grit commands. It is possible to call this command multiple times to re-initialize the active manifest, e.g. to switch manifest or to clone an additional manifest URL.
 
 Syntax:
 ```
-grit <grit-options> <git-command> <git-command-parameters>
+grit <grit-options> init <manifest-url> <init-options>
 ```
 
-git-command is any valid git command. Even locally defined git alias are possible. Essentially, all non-special grit commands are treated as generic commands.
+If `manifest-url` is specified, this URL is cloned into the GRIT_DIRECTORY as a first step.
 
-git-command-parameters are passed transparently to the specified git command.
+init-options are:
+
+| Option | Description |
+| --- | --- |
+| `--directory, -d` | The local directory path, relative to GRIT_DIRECTORY, where to clone the specified manifest URL. If not specified, the local directory path is taken from the last part of the URL (as git does). |
+| `--branch, -b` | The branch to checkout after the manifest URL has been cloned. |
+| `--manifest, -m` | The manifest to use as active manifest. The path is relative to GRIT_DIRECTORY. NOTE: The directory separator must always be "/", regardless of the OS specific separator. grit will automatically convert "/" to the OS specific separator. This option is mutually exclusive with the config option.  |
+| `--config, -c` | The configuration to use to generate an active manifest. The path is relative to GRIT_DIRECTORY. NOTE: The directory separator must always be "/", regardless of the OS specific separator. grit will automatically convert "/" to the OS specific separator. This option is mutually exclusive with the manifest option. |
 
 Examples:
 
 | Command | Description |
 | --- | --- |
-| `grit status` | Execute `git status` on all respositories in the active manifest. |
-| `grit -j4 -g g1,g2 status -s` | Execute `git status -s` on all respositories belonging to either group `g1` or `g2` (or both). Perform this operation using 4 parallel processes. |
+| `grit init https://github.com/rabarberpie/grit_test.git -b master` | Clone the manifest URL into `GRIT_DIRECTORY/grit_test` (but no active manifest is generated). |
+| `grit init -m grit_test/manifest1` | Use manifest1 as active manifest. |
+
+Note that above examples can be combined into `grit init https://github.com/rabarberpie/grit_test.git -b master -m grit_test/manifest1`
 
 # Clone Command
-Cloning repositories in the active manifest is not a generic command, but have grit specific logic. This is required since each repository has its own individual settings, as specified by the active manifest.
+The clone command is used to clone the repositories as specified by the active manifest. This is typically called after the init command.
 
 Syntax:
 ```
@@ -201,3 +209,23 @@ grit <grit-options> snapshot <snapshot-manifest-name>
 
 The snapshot-manifest-name (without .json) is optional. If not specified, a unique name is created based on date and time: "snapshot_YYYYMMDD_HHMMSS".
 The snapshot manifest file is stored in the GRIT_DIRECTORY and can be used in `grit init -m <snapshot-manifest-name>` to restore the snapshot state.
+
+# Generic Commands
+Generic commands are git commands that are transparently executed on all target repositories. For each repository, the result is printed as returned by git, prefixed with header lines that shows which repository the result is related to.
+Essentially, grit here acts like an iterator over multiple repositories, executing the same git command.
+
+Syntax:
+```
+grit <grit-options> <git-command> <git-command-parameters>
+```
+
+git-command is any valid git command. Even locally defined git alias are possible. Essentially, all non-special grit commands are treated as generic commands.
+
+git-command-parameters are passed transparently to the specified git command.
+
+Examples:
+
+| Command | Description |
+| --- | --- |
+| `grit status` | Execute `git status` on all respositories in the active manifest. |
+| `grit -j4 -g g1,g2 status -s` | Execute `git status -s` on all respositories belonging to either group `g1` or `g2` (or both). Perform this operation using 4 parallel processes. |
