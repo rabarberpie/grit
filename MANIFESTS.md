@@ -26,7 +26,15 @@ The profiles section of the manifest file may contain below settings:
 | `remote-branch` | Only to be used if the remote branch name is different from the local branch branch. |
 | `single-branch` | If set to `yes`, then only the history leading to the tip of the specified branch is cloned. |
 
-Example:
+# Miscellaneous
+In addition to repositories and profiles, there are also a few miscellaneous settings available:
+
+| Setting | Description |
+| --- | --- |
+| `default-profile` | Specifies the name of the default profile (optional). The default profile is used if a respository doesn´t include the `use-profile` setting. |
+| `run-after-clone` | Specifies a list of bash commands that is to be executed (in sequence) after a clone command (optional). This can be used to further setup the project. |
+
+# Examples
 
 ```
 {
@@ -76,6 +84,11 @@ Example:
             "groups": [ "g3", "g4" ],
             "use-profile": "android"
         }
-    ]
+    ],
+
+    "run-after-clone": [
+        "echo 'Run after clone 1'",
+        "echo 'Run after clone 2'"
+    ]				
 }
 ```

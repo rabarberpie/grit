@@ -80,25 +80,25 @@ chmod +x ~/bin/grit
 
 # Manifests
 Manifest files are the core settings files and have below sections:
-* Repositories: Contain the list of repositories that are included by the manifest. Optionally, may also include parameters/options which override the profile settings (see below).
+* Repositories: Contain the list of repositories that are included by the manifest. Optionally, may also include settings which take precedence over any profile settings (see below).
 
-* Profiles: A profile contains all required settings/parameters/options to interact with the remote repository (using git). Typically, many repositories share the same settings; by placing these in a shared profile, duplication is avoided. Optionally, one profile can be marked as "default", which will be used for all repositories which don't explicitely reference a specific profile.
+* Profiles: A profile contains all required settings to interact with the remote repository (using git). Typically, many repositories share the same settings; by placing these in a shared profile, duplication is avoided. Optionally, one profile can be marked as "default", which will be used for all repositories which don't explicitely reference a specific profile.
 A profile can inherit settings from another profile, to even further encapsulate shared settings in a parent profile. This can for example be used to place global settings in a parent profile, such as clone depth and/or branch name, and remote specific settings in child profiles.
 
 Thus, the priority order of any setting is:
-1. The repository setting
-2. The referenced profile setting (or default)
+1. The repository setting.
+2. The referenced profile setting (or default).
 3. The parent profile to above (if any).
 4. The grandparent profile (if any) etc. etc.
 
-# Configuration
-A specific configuration consists of layering one or many manifests on top of each other, where upper manifests override settings from lower manifests. The resulting manifest is stored as an "active manifest". Most grit commands are performed against this manifest.
-Optionally, it can also refer to other locations where additional manifest files should be fetched (as a first step, before the configuration is initialized).
+All grit commands, except `grit init`, operate on a single manifest file called the "active manifest", located in the GRIT_DIRECTORY directory (default: `.grit/_active_manifest.json`).
 
-Layering of manifests can be useful in different use-cases:
-* After cloning a project with many respositories, a developer wants to add a new repository or perhaps change branch on some existing repositories. These changes (only the differences) can be made in a "local manifest" which is then overlaid ontop of the project manifest. To simplify, the project master config file can include `local_manifest` as last manifest layer and then also include an empty `local_manifest.json` file. Everything is then setup for the developer to add the differences in this file.
-* A base platform is developed by one team. This team maintains a manifest that includes all repositories of the base platform. Another team needs to customize the base platform for a specific customer. This includes adding new repositories and branching off some repositories (which needs to be customized). By placing all these manifest changes in its own customer manifest and overlaying it ontop of the base platform manifest, the second team doesn't need to branch off the base platform manifest. They can even place the customer manifest in its own git and by using the "fetch manifest" mechanism in the configuration file, fetch the base platform manifest automatically when the customer configuration file is initialized.
-* A product consists of a common base platform with a framework layer ontop. This framework comes in two variants: one basic and one with extensions. These two variants are maintained on different branches, "basic_master" and "extended_master".
+The `grit init` command is used to contruct the "active manifest", either by copying a manifest file or by generating it from a configuration file. **Never modify the "active manifest" file manually!**
+
+See [MANIFESTS](MANIFESTS.md) for detailed information about the manifest file syntax.
+
+# Configurations
+Configurations are optional to use and are usually only needed for large projects. It enables advanced manifest handling, see [CONFIGS](CONFIGS.md) for more information.
 
 # Data Extension
 It is possible to add arbritarily json key/values as long as they start with "x-". grit will ignore all these keys. This can be used to store additional meta-data about the repositories, such as code license information, which is parsed by other tools.
@@ -121,7 +121,9 @@ grit-options are:
 | `--verbose, -v` | Add some more verbose printing |
 
 # Init Command
-The init command is used to initialize the active manifest, which is the basis for all other grit commands. It is possible to call this command multiple times to re-initialize the active manifest, e.g. to switch manifest or to clone an additional manifest URL.
+The init command is used to initialize the active manifest, which is the basis for all other grit commands. This manifest file is located in the GRIT_DIRECTORY directory (default: `.grit`), where all other manifest and configuration files are located as well.
+
+It is possible to call this command multiple times to re-initialize the active manifest, e.g. to switch manifest or to clone an additional manifest URL.
 
 Syntax:
 ```

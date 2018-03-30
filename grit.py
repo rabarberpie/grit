@@ -159,6 +159,48 @@ class Repository(Settings):
         return dct
 
 
+class Command(object):
+    """ Class to hold a command request and result data.
+    No getters/setters or properties, fields are accessed directly.
+    """
+
+    def __init__(self, command_line: str, init_display_line: str=None, done_display_line: str=None,
+                 print_errors=True, verbose=0, result_handler=None, client_data=None):
+        self.init_display_line = init_display_line  # Display line before starting command.
+        self.done_display_line = done_display_line  # Display line after command completed.
+        self.command_line = command_line   # The shell command line to execute.
+        self.print_errors = print_errors   # Print output if command exited with error.
+        self.verbose = verbose   # The verbose level.
+        self.result_code = -1    # The status code returned by the command. -1 means command not executed.
+        self.result_output = None   # The combined output of stdout and stderr by the command (in string)
+        self.result_handler = result_handler   # The result handler method to be called on the client side.
+        self.client_data = client_data   # Arbitrary data set by the client.
+
+    def execute(self):
+        """ Execute the command and store the result. """
+        if self.init_display_line is not None:
+            print(self.init_display_line)
+        # NOTE: universal_newlines makes output to be a string instead of bytes.
+        logger.debug("Started to run " + self.command_line)
+        result = subprocess.run(self.command_line, shell=True, stdout=subprocess.PIPE,
+                                stderr=subprocess.STDOUT, universal_newlines=True)
+        if result.returncode == 0:
+            # Successfully executed command.
+            logger.debug("Successful execution of " + self.command_line)
+            if self.done_display_line is not None:
+                print(self.done_display_line)
+        else:
+            # If an error occurred, always print the details.
+            logger.debug("Failed to execute " + self.command_line)
+            if self.print_errors:
+                output = "-" * 80 + "\n" + self.command_line + "\n"
+                if result.stdout is not None:
+                    output += result.stdout
+                print(output, end="")    # Since multiple threads are printing, print all in single call.
+        self.result_code = result.returncode
+        self.result_output = result.stdout
+
+
 class CommandExecutor(threading.Thread):
     """ Executes shell jobs in a separate thread.
     Each job consists of a sequence (list) of commands, which are executed in order (for dependency reasons).
@@ -167,47 +209,6 @@ class CommandExecutor(threading.Thread):
     If an error occurs when executing a command, the job is aborted, i.e. no further commands inside the job
     are executed. However, this will not stop other jobs from being executed. This is up to the caller to handle.
     """
-
-    class Command(object):
-        """ Class to hold a command request and result data.
-        No getters/setters or properties, fields are accessed directly.
-        """
-
-        def __init__(self, command_line: str, init_display_line: str=None, done_display_line: str=None,
-                     print_errors=True, verbose=0, result_handler=None, client_data=None):
-            self.init_display_line = init_display_line  # Display line before starting command.
-            self.done_display_line = done_display_line  # Display line after command completed.
-            self.command_line = command_line   # The shell command line to execute.
-            self.print_errors = print_errors   # Print output if command exited with error.
-            self.verbose = verbose   # The verbose level.
-            self.result_code = -1    # The status code returned by the command. -1 means command not executed.
-            self.result_output = None   # The combined output of stdout and stderr by the command (in string)
-            self.result_handler = result_handler   # The result handler method to be called on the client side.
-            self.client_data = client_data   # Arbitrary data set by the client.
-
-        def execute(self):
-            """ Execute the command and store the result. """
-            if self.init_display_line is not None:
-                print(self.init_display_line)
-            # NOTE: universal_newlines makes output to be a string instead of bytes.
-            logger.debug("Started to run " + self.command_line)
-            result = subprocess.run(self.command_line, shell=True, stdout=subprocess.PIPE,
-                                    stderr=subprocess.STDOUT, universal_newlines=True)
-            if result.returncode == 0:
-                # Successfully executed command.
-                logger.debug("Successful execution of " + self.command_line)
-                if self.done_display_line is not None:
-                    print(self.done_display_line)
-            else:
-                # If an error occurred, always print the details.
-                logger.debug("Failed to execute " + self.command_line)
-                if self.print_errors:
-                    output = "-" * 80 + "\n" + self.command_line + "\n"
-                    if result.stdout is not None:
-                        output += result.stdout
-                    print(output, end="")    # Since multiple threads are printing, print all in single call.
-            self.result_code = result.returncode
-            self.result_output = result.stdout
 
     def __init__(self, request_queue: queue.Queue, result_queue: queue.Queue):
         super().__init__()
@@ -346,6 +347,11 @@ class Manifest(object):
         """ Get all remove profiles in a list. Each item is a str (containing the profile name).
         Return an empty list if not defined. """
         return self.manifest.get("remove-profiles", list())
+
+    def get_run_after_clone_commands(self):
+        """ Get all run after clone commands. Each item is a str (containing the bash command line).
+        Return an empty list if not defined. """
+        return self.manifest.get("run-after-clone", list())
 
     def get_default_profile(self):
         """ Get the default profile, if defined. If not, None is returned.
@@ -489,6 +495,16 @@ class Manifest(object):
         if "default-profile" in overlay_manifest.manifest:
             default_profile_name = overlay_manifest.manifest["default-profile"]
             self.manifest["default-profile"] = default_profile_name
+            logger.debug("Overlaying default profile to " + default_profile_name)
+        # Next, overlay any run after clone commands. NOTE: overlaying means extending!
+        if "run-after-clone" in overlay_manifest.manifest:
+            run_after_clone_commands = overlay_manifest.manifest["run-after-clone"]   # This is a list.
+            if "run-after-clone" in self.manifest:
+                logger.debug("Extending run after clone with " + ",".join(run_after_clone_commands))
+                self.manifest["run-after-clone"].extend(run_after_clone_commands)
+            else:
+                logger.debug("Creating run after clone with " + ",".join(run_after_clone_commands))
+                self.manifest["run-after-clone"] = run_after_clone_commands
         # Next, overlay the profiles.
         for profile in overlay_manifest.get_profiles():
             profile_name = profile.get_profile_name()
@@ -631,7 +647,7 @@ class Manifest(object):
         clone_parser.add_argument("--dissociate", action="store_true", dest="dissociate")
         clone_parser.add_argument("--bare", action="store_true", dest="bare")
         clone_parser.add_argument("--mirror", action="store_true", dest="mirror")
-        clone_args = clone_parser.parse_args(args.args)   # Parse args after init.
+        clone_args = clone_parser.parse_args(args.args)   # Parse args after clone.
         self.set_args(args)
         self.prepare_for_commands()
         for repo in self.get_target_repos(args.groups):
@@ -672,9 +688,9 @@ class Manifest(object):
                 cmd_line += " --mirror"
             cmd_line += " " + self.get_mandatory_setting(repo, "remote-url") + "/" + repo.get_repo() + ".git"
             cmd_line += " " + local_path
-            job.append(CommandExecutor.Command(cmd_line,
-                                               "Started to clone " + repo.get_repo(),
-                                               "Completed " + repo.get_repo()))
+            job.append(Command(cmd_line,
+                               "Started to clone " + repo.get_repo(),
+                               "Completed " + repo.get_repo()))
             if not clone_args.bare and not clone_args.mirror:
                 # Next, configure the git, if needed.
                 remote_push_url = self.get_optional_setting(repo, "remote-push-url")
@@ -682,23 +698,30 @@ class Manifest(object):
                     # Add a different push URL.
                     cmd_line = cd_cmd_line + "git remote set-url --add --push " + remote_name\
                                + " " + remote_push_url + "/" + repo.get_repo() + ".git"
-                    job.append(CommandExecutor.Command(cmd_line))
+                    job.append(Command(cmd_line))
                     # Finally, checkout the branch, if needed.
                 if tag is not None:
                     # Tag name or commit (SHA-1). Just check it out; create no branch.
                     cmd_line = cd_cmd_line + "git checkout " + tag
-                    job.append(CommandExecutor.Command(cmd_line))
+                    job.append(Command(cmd_line))
                 elif remote_branch is not None:
                     # Must use capital -B to force create the branch; needed for example for master,
                     # which is already created by clone above.
                     cmd_line = cd_cmd_line + "git checkout -B " + self.get_mandatory_setting(repo, "branch")\
                                + " " + remote_name + "/" + remote_branch
-                    job.append(CommandExecutor.Command(cmd_line))
+                    job.append(Command(cmd_line))
             self.queue_job(job)
         # All commands queued up. Gather all remaining results and then cleanup and exit.
         self.finish_commands()
+        # Last, execute any bash commands - always in sequence.
+        for cmd_line in self.get_run_after_clone_commands():
+            # The command line may include single-quotes, but not double-quotes.
+            command = Command('bash -c "' + cmd_line + '"')
+            command.execute()
+            if command.result_output is not None:
+                print(command.result_output, end="")   # NL already included in result output.
 
-    def handler_generic_command_result(self, command):
+    def handle_generic_command_result(self, command):
         """ Handler for generic command results. """
         print("-" * 80)
         print("- " + command.client_data)   # Contains repo name.
@@ -723,8 +746,8 @@ class Manifest(object):
             # Execute the git command with the specified arguments.
             cmd_line = cd_cmd_line + "git " + args.command
             cmd_line += " " + " ".join(args.args)
-            job.append(CommandExecutor.Command(cmd_line, None, None, False, args.verbose,
-                                               self.handler_generic_command_result, client_data))
+            job.append(Command(cmd_line, None, None, False, args.verbose,
+                               self.handle_generic_command_result, client_data))
             self.queue_job(job)
         # All commands queued up. Gather all remaining results and then cleanup and exit.
         self.finish_commands()
@@ -755,13 +778,13 @@ class Manifest(object):
             cmd_line += " REMOTE_URL=" + self.get_mandatory_setting(repo, "remote-url")
             # By using bash -c, the environment variables are valid even if ;, |, && etc. are used.
             cmd_line += " bash -c '" + " ".join(args.args) + "'"
-            job.append(CommandExecutor.Command(cmd_line, None, None, args.verbose,
-                                               self.handler_generic_command_result, client_data))
+            job.append(Command(cmd_line, None, None, args.verbose,
+                               self.handle_generic_command_result, client_data))
             self.queue_job(job)
         # All commands queued up. Gather all remaining results and then cleanup and exit.
         self.finish_commands()
 
-    def handler_snapshot_command_result(self, command):
+    def handle_snapshot_command_result(self, command):
         """ Handler for snapshot command results. """
         repo = command.client_data
         if command.result_output is not None:
@@ -798,8 +821,8 @@ class Manifest(object):
             # Determine the local path first, since it is needed for additional commands in the git.
             cd_cmd_line = "cd " + repo.get_local_path() + " && "
             cmd_line = cd_cmd_line + "git rev-parse HEAD"
-            job.append(CommandExecutor.Command(cmd_line, None, None, args.verbose,
-                                               self.handler_snapshot_command_result, repo))   # repo as client data.
+            job.append(Command(cmd_line, None, None, args.verbose,
+                               self.handle_snapshot_command_result, repo))   # repo as client data.
             self.queue_job(job)
         # All commands queued up. Gather all remaining results and then cleanup and exit.
         self.finish_commands()
@@ -867,8 +890,7 @@ class Config(object):
                     cmd_line += " --branch " + branch
                 cmd_line += " " + fetch_manifest.get_mandatory_setting("remote-url") + "/" + repo + ".git"
                 cmd_line += " " + local_path
-                command = CommandExecutor.Command(cmd_line, "Fetching additional manifest and config file(s) from "
-                                                  + repo + "...")
+                command = Command(cmd_line, "Fetching additional manifest and config file(s) from " + repo + "...")
                 command.execute()
             else:
                 raise ValueError("Method " + fetch_manifest["method"] + " is not supported.")
@@ -937,7 +959,7 @@ class Config(object):
             if not os.path.exists(GRIT_DIRECTORY):
                 # Create grit directory if it doesn't exist (=first time).
                 cmd_line = "mkdir " + GRIT_DIRECTORY
-                command = CommandExecutor.Command(cmd_line)
+                command = Command(cmd_line)
                 command.execute()
             cmd_line = "cd " + GRIT_DIRECTORY + " && git clone"
             if init_args.branch is not None:
@@ -945,7 +967,7 @@ class Config(object):
             cmd_line += " " + init_args.manifest_url   # Remote URL and repository (including .git).
             if init_args.directory is not None:
                 cmd_line += " " + init_args.directory   # TODO: Convert to OS specific path?
-            command = CommandExecutor.Command(cmd_line, "Fetching specified manifest and config file(s)...")
+            command = Command(cmd_line, "Fetching specified manifest and config file(s)...")
             command.execute()
         # Load and activate a config if specified.
         if init_args.config is not None:
