@@ -25,6 +25,7 @@ The profiles section of the manifest file may contain below settings:
 | `branch` | The branch to create and checkout after a repository is cloned. The local branch is setup to track the remote branch. |
 | `remote-branch` | Only to be used if the remote branch name is different from the local branch branch. |
 | `single-branch` | If set to `yes`, then only the history leading to the tip of the specified branch is cloned. |
+| `depth` | The clone depth in number of commits and implies `single-branch` to `yes`. To fetch the histories near the tips of all branches, explicitely set `single-branch` to `no`. |
 
 # Miscellaneous
 In addition to repositories and profiles, there are also a few miscellaneous settings available:

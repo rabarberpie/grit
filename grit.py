@@ -100,7 +100,7 @@ class Settings(object):
 class Profile(Settings):
     """ Stores all settings related to a profile. """
     valid_keys = ["inherit", "remote-name", "remote-url", "remote-push-url",
-                  "branch", "remote-branch", "single-branch"]
+                  "branch", "remote-branch", "single-branch", "depth"]
 
     def __init__(self, profile_name: str):
         super().__init__(Profile.valid_keys)
@@ -533,6 +533,9 @@ class Manifest(object):
         # Open log file.
         if not self.args.no_log:
             self.log_file_stream = open(os.path.join(self.get_root_path(), GRIT_DIRECTORY, LOG_FILE_NAME), "a+t")
+            self.log_file_stream.write("*" * 80 + "\n")
+            self.log_file_stream.write("* " + time.strftime("%Y%m%d %H:%M:%S") + "\n")
+            self.log_file_stream.write("*" * 80 + "\n")
         if self.args.parallel_jobs > 1:
             # Setup all command executors. Each item in request and result queue is a list of Command instances.
             self.request_queue = queue.Queue(args.parallel_jobs + COMMAND_QUEUE_EXTRA_SIZE)
@@ -643,10 +646,17 @@ class Manifest(object):
     def do_clone(self, args):
         """ Performs git clone on all repos. """
         clone_parser = argparse.ArgumentParser()
+        # Mirror options can only be specified as clone command options (not in manifest).
         clone_parser.add_argument("--reference", action="store", dest="reference", default=None)
         clone_parser.add_argument("--dissociate", action="store_true", dest="dissociate")
         clone_parser.add_argument("--bare", action="store_true", dest="bare")
         clone_parser.add_argument("--mirror", action="store_true", dest="mirror")
+        # Some default settings if not specified in the manifest.
+        clone_parser.add_argument("--single-branch", action="store", dest="single_branch", default=None)
+        clone_parser.add_argument("--depth", action="store", dest="depth", type=int, default=None)
+        # No post run is used to disable executing the "run-after-clone" commands in the manifest.
+        clone_parser.add_argument("--no-post-run", action="store_true", dest="no_post_run")
+        # Parse the clone args.
         clone_args = clone_parser.parse_args(args.args)   # Parse args after clone.
         self.set_args(args)
         self.prepare_for_commands()
@@ -657,6 +667,8 @@ class Manifest(object):
             if os.path.exists(local_path):
                 # Local repo already exist, skip this one silently. For instance, if you re-clone, avoid
                 # lots of errors for all existing repos.
+                if args.verbose > 0:
+                    print("Skipping " + repo.get_repo() + " since directory already exist.")
                 continue
             cd_cmd_line = "cd " + local_path + " && "
             # First, clone the repository.
@@ -673,9 +685,14 @@ class Manifest(object):
                     # If a different remote branch is not specified, checkout branch directly in clone command.
                     # Remote branch is also tracked.
                     cmd_line += " --branch " + self.get_mandatory_setting(repo, "branch")
-                single_branch = self.get_optional_setting(repo, "single-branch")
+                single_branch = self.get_optional_setting(repo, "single-branch", clone_args.single_branch)
                 if single_branch == "yes":
                     cmd_line += " --single-branch"
+                elif single_branch == "no":
+                    cmd_line += " --no-single-branch"
+            depth = self.get_optional_setting(repo, "depth", clone_args.depth)
+            if depth is not None:
+                cmd_line += " --depth " + str(depth)
             if clone_args.reference is not None:
                 # The reference argument must refer to the root of the other project.
                 # TODO: Later git versions support --reference-if-able. This is better, if available.
@@ -688,8 +705,12 @@ class Manifest(object):
                 cmd_line += " --mirror"
             cmd_line += " " + self.get_mandatory_setting(repo, "remote-url") + "/" + repo.get_repo() + ".git"
             cmd_line += " " + local_path
+            if args.verbose > 0:
+                init_display_line = "Started to clone " + repo.get_repo() + " (" + cmd_line + ")"
+            else:
+                init_display_line = "Started to clone " + repo.get_repo()
             job.append(Command(cmd_line,
-                               "Started to clone " + repo.get_repo(),
+                               init_display_line,
                                "Completed " + repo.get_repo()))
             if not clone_args.bare and not clone_args.mirror:
                 # Next, configure the git, if needed.
@@ -713,13 +734,14 @@ class Manifest(object):
             self.queue_job(job)
         # All commands queued up. Gather all remaining results and then cleanup and exit.
         self.finish_commands()
-        # Last, execute any bash commands - always in sequence.
-        for cmd_line in self.get_run_after_clone_commands():
-            # The command line may include single-quotes, but not double-quotes.
-            command = Command('bash -c "' + cmd_line + '"')
-            command.execute()
-            if command.result_output is not None:
-                print(command.result_output, end="")   # NL already included in result output.
+        if not clone_args.no_post_run:
+            # Last, execute any bash commands - always in sequence.
+            for cmd_line in self.get_run_after_clone_commands():
+                # The command line may include single-quotes, but not double-quotes.
+                command = Command('bash -c "' + cmd_line + '"')
+                command.execute()
+                if command.result_output is not None:
+                    print(command.result_output, end="")   # NL already included in result output.
 
     def handle_generic_command_result(self, command):
         """ Handler for generic command results. """

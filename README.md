@@ -91,9 +91,9 @@ Thus, the priority order of any setting is:
 3. The parent profile to above (if any).
 4. The grandparent profile (if any) etc. etc.
 
-All grit commands, except `grit init`, operate on a single manifest file called the "active manifest", located in the GRIT_DIRECTORY directory (default: `.grit/_active_manifest.json`).
+All grit commands, except `grit init`, operate on a single manifest file called the active manifest, located in the GRIT_DIRECTORY directory (default: `.grit/_active_manifest.json`).
 
-The `grit init` command is used to contruct the "active manifest", either by copying a manifest file or by generating it from a configuration file. **Never modify the "active manifest" file manually!**
+The `grit init` command is used to contruct the active manifest, either by copying a manifest file or by generating it from a configuration file. **Never modify the active manifest file manually!**
 
 See [MANIFESTS](MANIFESTS.md) for detailed information about the manifest file syntax.
 
@@ -117,8 +117,10 @@ grit-options are:
 | --- | --- |
 | `--groups, -g <groups>` | Comma-separated list of groups (optional). The command is only performed for repositories belonging to at least one of listed groups. |
 | `--jobs, -j <n>` | Perform the command using n parallel processes (default: 1). Particularly useful to speed up clone operations. |
-| `--force, -f` | Continue even if an error occurred |
-| `--verbose, -v` | Add some more verbose printing |
+| `--force, -f` | Continue even if an error occurred. |
+| `--no-log` | Do not log command details in the command log. By default, all executed commands by grit are appended in the `GRIT_DIRECTIRY/_command.log` log file. This log file can be inspected for details when error occurs etc. |
+| `--verbose, -v` | Add some more verbose printing. |
+| `--version` | Print grit version and then exit. |
 
 # Init Command
 The init command is used to initialize the active manifest, which is the basis for all other grit commands. This manifest file is located in the GRIT_DIRECTORY directory (default: `.grit`), where all other manifest and configuration files are located as well.
@@ -162,6 +164,9 @@ clone-options are:
 
 | Option | Description |
 | --- | --- |
+| `--depth <depth>` | Default clone depth if not specified in the active manifest (see git documentation for more details). |
+| `--single-branch <yes/no>` | Default single-branch option if not specified in the active manifest. Note that `--single-branch yes` is mapped to git option `--single-branch` and `--single-branch no` is mapped to `--no-single-branch` (see git documentation for more details). |
+| `--no-post-run` | If specified, the "run-after-clone" commands in the active manifest are skipped. |
 | `--mirror` | Clone with `--mirror` (see git documentation for more details) |
 | `--bare` | Clone with `--bare` (see git documentation for more details) |
 | `--reference <other_project_root>` | Clone with `--reference` to the same repository in another project (see git documentation for more details) |
