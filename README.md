@@ -236,3 +236,16 @@ Examples:
 | --- | --- |
 | `grit status` | Execute `git status` on all respositories in the active manifest. |
 | `grit -j4 -g g1,g2 status -s` | Execute `git status -s` on all respositories belonging to either group `g1` or `g2` (or both). Perform this operation using 4 parallel processes. |
+
+# Aliases
+Long and frequent grit commads can be simplified by adding aliases to the (optional) `~/.gritaliases` file. Aliases work as simple text substitutions *before* the grit command line is parsed.
+
+Example content of `~/.gritaliases`:
+```
+{
+    "init_grit": "init https://github.com/rabarberpie/grit_test.git -b master",
+    "init_grit2": "init https://github.com/rabarberpie/grit_test2.git"
+}
+```
+
+Typing `grit init_grit -c config` is then equivalent to `grit init https://github.com/rabarberpie/grit_test.git -b master -c config`.

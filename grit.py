@@ -14,6 +14,7 @@ logger = logging.getLogger(__name__)
 GRIT_DIRECTORY = ".grit"
 LOG_FILE_NAME = "_commands.log"
 ACTIVE_MANIFEST_FILE = "_active_manifest"   # .json is added automatically
+GRIT_ALIASES_FILE = ".gritaliases"
 ACTIVE_CONFIG_FILE = "_config"   # Contains the current active config (file path to config file except .json)
 # Command queue extra size in addition to the number of parallel jobs. This is used to make sure the
 # queue is always full (in practise).
@@ -538,7 +539,7 @@ class Manifest(object):
             self.log_file_stream.write("*" * 80 + "\n")
         if self.args.parallel_jobs > 1:
             # Setup all command executors. Each item in request and result queue is a list of Command instances.
-            self.request_queue = queue.Queue(args.parallel_jobs + COMMAND_QUEUE_EXTRA_SIZE)
+            self.request_queue = queue.Queue(self.args.parallel_jobs + COMMAND_QUEUE_EXTRA_SIZE)
             self.result_queue = queue.Queue()   # Result queue is unlimited.
             self.pending_jobs = 0
             for i in range(self.args.parallel_jobs):
@@ -1007,43 +1008,77 @@ class Config(object):
             print("Saved as active manifest.")
 
 
+class Grit(object):
+    """ Main grit class for executing commands. """
+
+    def __init__(self):
+        self.aliases = None
+        self.load_aliases()
+
+    def load_aliases(self):
+        """ Load any aliases from user's home directory. """
+        file_path = os.path.join(os.path.expanduser("~"), GRIT_ALIASES_FILE)
+        try:
+            with open(file_path, "r") as file_stream:
+                logger.debug("Loading grit aliases from " + file_path)
+                try:
+                    self.aliases = json.load(file_stream)
+                except json.JSONDecodeError as err:
+                    raise JSONDecodeError(str(err) + " in file " + file_path)
+        except FileNotFoundError:
+            # It is optional to have a grit aliases file.
+            logger.debug("No grit aliases found at " + file_path)
+            pass
+
+    def substitute_aliases(self, string):
+        """ Substitutes aliases in the provided string. This is performed using simple text replacements. """
+        for alias in self.aliases:
+            string = string.replace(alias, self.aliases[alias])
+        return string
+
+    def run_command(self, command_line: str):
+        """ Runs the grit command with its options and parameters, all provided as a string. """
+        parser = argparse.ArgumentParser(prog="grit",
+                                         description="grit is a tool to manage many git repositories efficiently"
+                                                     " in a project.")
+        parser.add_argument("--version", action="version", version="%(prog)s 1.0")
+        parser.add_argument("--verbose", "-v", action="count", default=0)
+        parser.add_argument("--debug", action="store_true", dest="debug_mode", help="enable debug mode.")
+        parser.add_argument("--force", "-f", action="store_true", dest="force_mode",
+                            help="continue even if an error occurred.")
+        parser.add_argument("--jobs", "-j", type=int, default=1, dest="parallel_jobs",
+                            help="number of parallel jobs to perform. Default is 1.")
+        parser.add_argument("--no-log", action="store_true", dest="no_log",
+                            help="do not add command details to log file.")
+        parser.add_argument("--groups", "-g", action="store", dest="groups", default=None,
+                            help="a repository must belong to at least one of the listed groups.\n"
+                                 "Multiple groups must be comma separated with no space between.")
+        parser.add_argument("command", help="command to perform: init, clone, foreach, snapshot, or any git command.")
+        parser.add_argument("args", help="arguments to the command (depends on command)", nargs=argparse.REMAINDER)
+        command_line = self.substitute_aliases(command_line)
+        args = parser.parse_args(command_line.split(" "))
+        if args.debug_mode:
+            logging.basicConfig(level=logging.DEBUG)
+            logger.debug("Enabled debug mode.")
+            logger.debug("Running command " + command_line)
+        else:
+            logger.setLevel(logging.ERROR)
+        if args.command == "init":   # init must be called from the project root directory (=parent of GRIT_DIRECTORY).
+            config = Config()
+            config.do_init(args)
+        else:
+            manifest = Manifest()
+            manifest.load_active_manifest()
+            if args.command == "clone":
+                manifest.do_clone(args)
+            elif args.command == "foreach":
+                manifest.do_foreach(args)
+            elif args.command == "snapshot":
+                manifest.do_snapshot(args)
+            else:
+                # Assume a git command. Note that local git aliases also will work.
+                manifest.do_generic(args)
+
+
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(prog="grit",
-                                     description="grit is a tool to manage many git repositories effeciently in a project.")
-    parser.add_argument("--version", action="version", version="%(prog)s 1.0")
-    parser.add_argument("--verbose", "-v", action="count", default=0)
-    parser.add_argument("--debug", action="store_true", dest="debug_mode", help="enable debug mode.")
-    parser.add_argument("--force", "-f", action="store_true", dest="force_mode", help="continue even if an error occurred.")
-    parser.add_argument("--jobs", "-j", type=int, default=1, dest="parallel_jobs", help="number of parallel jobs to perform. Default is 1.")
-    parser.add_argument("--no-log", action="store_true", dest="no_log", help="do not add command details to log file.")
-    parser.add_argument("--groups", "-g", action="store", dest="groups", default=None,
-                        help="a repository must belong to at least one of the listed groups.\n"
-                        "Multiple groups must be comma separated with no space between.")
-    parser.add_argument("command", help="command to perform: init, clone, foreach, or any git command.")
-    parser.add_argument("args", help="arguments to the command (depends on command)", nargs=argparse.REMAINDER)
-    args = parser.parse_args()
-    if args.debug_mode:
-        logging.basicConfig(level=logging.DEBUG)
-        logger.debug("Enabled debug mode.")
-    else:
-        logger.setLevel(logging.ERROR)
-    if args.command == "init":   # init must be called from the project root directory (=parent of GRIT_DIRECTORY).
-        config = Config()
-        config.do_init(args)
-    elif args.command == "clone":
-        manifest = Manifest()
-        manifest.load_active_manifest()
-        manifest.do_clone(args)
-    elif args.command == "foreach":
-        manifest = Manifest()
-        manifest.load_active_manifest()
-        manifest.do_foreach(args)
-    elif args.command == "snapshot":
-        manifest = Manifest()
-        manifest.load_active_manifest()
-        manifest.do_snapshot(args)
-    else:
-        # Assume a git command. Note that local git aliases also will work.
-        manifest = Manifest()
-        manifest.load_active_manifest()
-        manifest.do_generic(args)
+    Grit().run_command(" ".join(sys.argv[1:]))
