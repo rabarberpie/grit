@@ -179,6 +179,25 @@ Examples:
 | `grit clone` | Clone all repositories in the active manifest.	|
 | `grit -j4 -g g1,g2 clone` | Clone all respositories belonging to either group `g1` or `g2`. Perform this operation using 4 parallel processes. |
 
+Mirror example:
+
+First, create a local mirror:
+```
+mkdir local_mirror
+cd local_mirror
+grit init https://github.com/rabarberpie/grit_test.git -b master -c grit_test/config
+grit clone --mirror
+cd ..
+```
+
+Next, create a new repo using the mirror as reference:
+```
+mkdir local_project
+cd local_project
+grit init https://github.com/rabarberpie/grit_test.git -b master -c grit_test/config
+grit clone --reference ../local_mirror
+```
+
 # For-each command
 The for-each command executes a specified bash command on each target repository.
 
@@ -226,7 +245,7 @@ Syntax:
 grit <grit-options> <git-command> <git-command-parameters>
 ```
 
-git-command is any valid git command. Even locally defined git alias are possible. Essentially, all non-special grit commands are treated as generic commands.
+git-command is any valid git command. Even locally defined git alias are possible. In practise, all non-special grit commands are treated as generic commands.
 
 git-command-parameters are passed transparently to the specified git command.
 
