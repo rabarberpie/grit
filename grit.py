@@ -1016,24 +1016,25 @@ class Grit(object):
         self.load_aliases()
 
     def load_aliases(self):
-        """ Load any aliases from user's home directory. """
+        """ Load any aliases from user's home directory.
+        NOTE: debug mode is enabled after this method is called, so no point in calling logger.debug here.
+        """
         file_path = os.path.join(os.path.expanduser("~"), GRIT_ALIASES_FILE)
         try:
             with open(file_path, "r") as file_stream:
-                logger.debug("Loading grit aliases from " + file_path)
                 try:
                     self.aliases = json.load(file_stream)
                 except json.JSONDecodeError as err:
                     raise JSONDecodeError(str(err) + " in file " + file_path)
         except FileNotFoundError:
             # It is optional to have a grit aliases file.
-            logger.debug("No grit aliases found at " + file_path)
             pass
 
     def substitute_aliases(self, string):
         """ Substitutes aliases in the provided string. This is performed using simple text replacements. """
-        for alias in self.aliases:
-            string = string.replace(alias, self.aliases[alias])
+        if self.aliases is not None:
+            for alias in self.aliases:
+                string = string.replace(alias, self.aliases[alias])
         return string
 
     def run_command(self, command_line: str):
